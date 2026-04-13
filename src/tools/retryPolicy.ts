@@ -18,3 +18,7 @@ export function isBrowserClosedError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return BROWSER_CLOSED_PATTERN.test(err.message);
 }
+
+export function isBrowserClosedMessage(text: string): boolean {
+  return BROWSER_CLOSED_PATTERN.test(text);
+}

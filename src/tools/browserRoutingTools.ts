@@ -3,8 +3,17 @@ import { MissingSessionIdError, ToolExecutionError } from "../infra/errors.js";
 import type { ToolRegistry } from "../server/toolRegistry.js";
 import type { SessionManager } from "../sessions/sessionManager.js";
 import type { ChildToolInfo } from "../sessions/sessionTypes.js";
-import { isBrowserClosedError, isSafeRetryTool } from "./retryPolicy.js";
+import { isBrowserClosedError, isBrowserClosedMessage, isSafeRetryTool } from "./retryPolicy.js";
 import { withSessionId } from "./schemas.js";
+
+function extractErrorText(result: unknown): string | undefined {
+  const r = result as any;
+  if (!Array.isArray(r?.content)) return undefined;
+  return r.content
+    .filter((c: any) => c?.type === "text" && typeof c.text === "string")
+    .map((c: any) => c.text as string)
+    .join("\n") || undefined;
+}
 
 function formatResult(result: unknown): any {
   if (result && typeof result === "object" && "content" in (result as Record<string, unknown>)) {
@@ -61,22 +70,41 @@ export class BrowserRoutingTools {
       return client.callTool({ name: toolName, arguments: toolArgs });
     };
 
+    const tryRecover = async (): Promise<unknown> => {
+      if (!isSafeRetryTool(toolName)) return undefined;
+      const generationBefore = session.generation;
+      await this.sessions.recoverSession(sessionId, "browser closed during tool call");
+      if (session.generation > generationBefore) {
+        return callOnce();
+      }
+      return undefined;
+    };
+
     let result: unknown;
     try {
       result = await callOnce();
     } catch (err) {
-      if (isBrowserClosedError(err) && isSafeRetryTool(toolName)) {
-        const generationBefore = session.generation;
-        // Force recovery: close stale handles, set error status, relaunch
-        await this.sessions.recoverSession(sessionId, "browser closed during tool call");
-        // Only retry if recovery actually happened (generation bumped)
-        if (session.generation > generationBefore) {
-          result = await callOnce();
+      if (isBrowserClosedError(err)) {
+        const retried = await tryRecover();
+        if (retried !== undefined) {
+          result = retried;
         } else {
           throw err;
         }
       } else {
         throw err;
+      }
+    }
+
+    // MCP SDK returns errors as result objects with isError: true instead of throwing.
+    // Inspect the result and attempt recovery for browser-closed errors on safe tools.
+    if (result && typeof result === "object" && (result as any).isError === true) {
+      const text = extractErrorText(result);
+      if (text && isBrowserClosedMessage(text) && isSafeRetryTool(toolName)) {
+        const retried = await tryRecover();
+        if (retried !== undefined) {
+          result = retried;
+        }
       }
     }
 

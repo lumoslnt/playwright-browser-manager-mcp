@@ -75,10 +75,14 @@ test("materializeFromExternalProfile clones external dir into profilesRoot", asy
 
   const pm = new ProfileManager(root);
   await pm.ensureRoot();
-  const result = await pm.materializeFromExternalProfile({ type: "external-profile", path: srcProfile });
+  const { targetDir, resolvedSourcePath } = await pm.materializeFromExternalProfile({
+    type: "external-profile",
+    path: srcProfile,
+  });
 
-  expect(result.startsWith(root)).toBe(true);
-  expect(await fs.readFile(path.join(result, "Cookies"), "utf8")).toBe("auth-data");
+  expect(targetDir.startsWith(root)).toBe(true);
+  expect(resolvedSourcePath).toBe(srcProfile);
+  expect(await fs.readFile(path.join(targetDir, "Cookies"), "utf8")).toBe("auth-data");
   await cleanup(root, externalRoot);
 });
 
@@ -87,9 +91,40 @@ test("materializeFromExternalProfile throws ProfileSeedSourceNotFoundError when 
   const pm = new ProfileManager(root);
   await pm.ensureRoot();
 
-  await expect(pm.materializeFromExternalProfile({ type: "external-profile", path: "/does/not/exist" })).rejects.toMatchObject({
+  await expect(
+    pm.materializeFromExternalProfile({ type: "external-profile", path: "/does/not/exist" }),
+  ).rejects.toMatchObject({
     code: "ProfileSeedSourceNotFoundError",
   });
+  await cleanup(root);
+});
+
+// --- Security boundary tests ---
+
+test("resolveExternalProfile rejects profileName containing '..'", async () => {
+  const root = await makeTempDir();
+  const pm = new ProfileManager(root);
+  await expect(
+    pm.resolveExternalProfile({ type: "external-profile", browser: "chrome", profileName: "../../evil" }),
+  ).rejects.toMatchObject({ code: "ProfileSeedSourceNotFoundError" });
+  await cleanup(root);
+});
+
+test("resolveExternalProfile rejects profileName containing forward slash", async () => {
+  const root = await makeTempDir();
+  const pm = new ProfileManager(root);
+  await expect(
+    pm.resolveExternalProfile({ type: "external-profile", browser: "chrome", profileName: "sub/dir" }),
+  ).rejects.toMatchObject({ code: "ProfileSeedSourceNotFoundError" });
+  await cleanup(root);
+});
+
+test("resolveExternalProfile rejects profileName containing backslash", async () => {
+  const root = await makeTempDir();
+  const pm = new ProfileManager(root);
+  await expect(
+    pm.resolveExternalProfile({ type: "external-profile", browser: "chrome", profileName: "sub\\dir" }),
+  ).rejects.toMatchObject({ code: "ProfileSeedSourceNotFoundError" });
   await cleanup(root);
 });
 

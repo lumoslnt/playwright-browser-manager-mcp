@@ -10,19 +10,23 @@ function text(data: unknown) {
 }
 
 const profileSourceSchema = z.union([
-  z.object({ type: z.literal("managed-empty") }),
-  z.object({ type: z.literal("external-profile"), path: z.string().min(1) }),
-  z.object({
-    type: z.literal("external-profile"),
-    browser: z.enum(["chrome", "msedge"]),
-    profile: z.literal("default"),
-  }),
-  z.object({
-    type: z.literal("external-profile"),
-    browser: z.enum(["chrome", "msedge"]),
-    profileName: z.string().min(1),
-  }),
-  z.object({ type: z.literal("session"), sessionId: z.string().min(1) }),
+  z.object({ type: z.literal("managed-empty") }).strict(),
+  z.object({ type: z.literal("external-profile"), path: z.string().min(1) }).strict(),
+  z
+    .object({
+      type: z.literal("external-profile"),
+      browser: z.enum(["chrome", "msedge"]),
+      profile: z.literal("default"),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("external-profile"),
+      browser: z.enum(["chrome", "msedge"]),
+      profileName: z.string().min(1),
+    })
+    .strict(),
+  z.object({ type: z.literal("session"), sessionId: z.string().min(1) }).strict(),
 ]);
 
 export function registerSessionTools(

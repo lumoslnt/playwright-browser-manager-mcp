@@ -60,6 +60,63 @@ test("createSession with external-profile materializes a new dir and records met
   await cleanup(root);
 });
 
+// --- Observability: seededFromExternalProfilePath always populated for all external-profile variants ---
+
+test("createSession with browser+profileName always records resolved seededFromExternalProfilePath", async () => {
+  const { root, profilesRoot, manager } = await makeEnv();
+
+  // Create a fake browser user data dir that looks like a real profile
+  const fakeUserDataRoot = path.join(root, "fake-browser-user-data");
+  const fakeProfileDir = path.join(fakeUserDataRoot, "Profile 1");
+  await fs.mkdir(fakeProfileDir, { recursive: true });
+  await fs.writeFile(path.join(fakeProfileDir, "Cookies"), "cookie-data");
+
+  // Patch ProfileManager to use our fake browser root
+  const pm = (manager as any).profiles as import("../profiles/profileManager.js").ProfileManager;
+  const origBrowserRoot = (pm as any).browserUserDataRoot.bind(pm);
+  (pm as any).browserUserDataRoot = (_browser: string) => fakeUserDataRoot;
+
+  const session = await manager.createSession({
+    name: "obs-profileName",
+    browserType: "chrome",
+    profileSource: { type: "external-profile", browser: "chrome", profileName: "Profile 1" },
+  });
+
+  // Must always contain the resolved real path, not undefined
+  expect(session.seededFromExternalProfilePath).toBe(fakeProfileDir);
+  expect(session.profileDir.startsWith(profilesRoot)).toBe(true);
+  const copied = await fs.readFile(path.join(session.profileDir, "Cookies"), "utf8");
+  expect(copied).toBe("cookie-data");
+
+  (pm as any).browserUserDataRoot = origBrowserRoot;
+  await cleanup(root);
+});
+
+test("createSession with browser+default always records resolved seededFromExternalProfilePath", async () => {
+  const { root, profilesRoot, manager } = await makeEnv();
+
+  const fakeUserDataRoot = path.join(root, "fake-browser-user-data2");
+  const fakeDefaultDir = path.join(fakeUserDataRoot, "Default");
+  await fs.mkdir(fakeDefaultDir, { recursive: true });
+  await fs.writeFile(path.join(fakeDefaultDir, "Cookies"), "default-cookie");
+
+  const pm = (manager as any).profiles as import("../profiles/profileManager.js").ProfileManager;
+  const origBrowserRoot = (pm as any).browserUserDataRoot.bind(pm);
+  (pm as any).browserUserDataRoot = (_browser: string) => fakeUserDataRoot;
+
+  const session = await manager.createSession({
+    name: "obs-default",
+    browserType: "chrome",
+    profileSource: { type: "external-profile", browser: "chrome", profile: "default" },
+  });
+
+  expect(session.seededFromExternalProfilePath).toBe(fakeDefaultDir);
+  expect(session.profileDir.startsWith(profilesRoot)).toBe(true);
+
+  (pm as any).browserUserDataRoot = origBrowserRoot;
+  await cleanup(root);
+});
+
 test("createSession with session source forks the source profileDir", async () => {
   const { root, profilesRoot, manager } = await makeEnv();
 

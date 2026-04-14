@@ -79,11 +79,25 @@ export class ProfileManager {
       let profileSubdir: string;
       if ("profileName" in input) {
         profileSubdir = input.profileName;
+        // Prevent path traversal: profileName must be a single path segment with no separators
+        if (
+          profileSubdir.includes("..") ||
+          profileSubdir.includes("/") ||
+          profileSubdir.includes("\\")
+        ) {
+          throw new ProfileSeedSourceNotFoundError("external-profile", profileSubdir);
+        }
+        // Post-resolve boundary check: ensure resolved path stays within userDataRoot
+        const userDataRootResolved = path.resolve(userDataRoot);
+        const candidate = path.resolve(userDataRoot, profileSubdir);
+        if (!candidate.startsWith(userDataRootResolved + path.sep) && candidate !== userDataRootResolved) {
+          throw new ProfileSeedSourceNotFoundError("external-profile", profileSubdir);
+        }
+        resolvedPath = candidate;
       } else {
         // profile: "default"
-        profileSubdir = "Default";
+        resolvedPath = path.join(userDataRoot, "Default");
       }
-      resolvedPath = path.join(userDataRoot, profileSubdir);
     }
 
     try {
@@ -105,11 +119,11 @@ export class ProfileManager {
   async materializeFromExternalProfile(
     input: ExternalProfileInput,
     targetName?: string,
-  ): Promise<string> {
-    const sourcePath = await this.resolveExternalProfile(input);
+  ): Promise<{ targetDir: string; resolvedSourcePath: string }> {
+    const resolvedSourcePath = await this.resolveExternalProfile(input);
     const targetDir = await this.createManagedCloneDir(targetName);
-    await this.copyProfileDir(sourcePath, targetDir);
-    return targetDir;
+    await this.copyProfileDir(resolvedSourcePath, targetDir);
+    return { targetDir, resolvedSourcePath };
   }
 
   async materializeFromSessionProfile(

@@ -109,12 +109,11 @@ export class SessionManager {
     }
 
     if (profileSource.type === "external-profile") {
-      const profileDir = await this.profiles.materializeFromExternalProfile(profileSource);
-      const seededFromExternalProfilePath =
-        "path" in profileSource ? profileSource.path : undefined;
+      const { targetDir: profileDir, resolvedSourcePath } =
+        await this.profiles.materializeFromExternalProfile(profileSource, fallbackName);
       return {
         profileDir,
-        seededFromExternalProfilePath,
+        seededFromExternalProfilePath: resolvedSourcePath,
         materializedAt: new Date().toISOString(),
       };
     }
@@ -123,6 +122,7 @@ export class SessionManager {
       const sourceSession = this.getSession(profileSource.sessionId);
       const profileDir = await this.profiles.materializeFromSessionProfile(
         sourceSession.profileDir,
+        fallbackName,
       );
       return {
         profileDir,

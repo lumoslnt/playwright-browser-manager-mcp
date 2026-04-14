@@ -11,6 +11,13 @@ export type SessionStatus =
 
 export type ProfileMode = "persistent" | "isolated" | "fallback-isolated";
 
+export type ProfileSourceRecord =
+  | { type: "managed-empty" }
+  | { type: "external-profile"; path: string }
+  | { type: "external-profile"; browser: "chrome" | "msedge"; profile: "default" }
+  | { type: "external-profile"; browser: "chrome" | "msedge"; profileName: string }
+  | { type: "session"; sessionId: string };
+
 export interface LaunchConfig {
   browserType: "chrome" | "msedge" | "chromium";
   profileDir: string;
@@ -44,6 +51,10 @@ export interface SessionRecord {
   generation: number;
   recoveryPromise?: Promise<void>;
   profileMode: ProfileMode;
+  profileSource: ProfileSourceRecord;
+  seededFromSessionId?: string;
+  seededFromExternalProfilePath?: string;
+  materializedAt?: string;
 }
 
 export interface PersistedSession {
@@ -60,4 +71,8 @@ export interface PersistedSession {
   lastError?: string;
   generation: number;
   profileMode: ProfileMode;
+  profileSource: ProfileSourceRecord;
+  seededFromSessionId?: string;
+  seededFromExternalProfilePath?: string;
+  materializedAt?: string;
 }

@@ -79,6 +79,41 @@ export class ProfileLockedError extends AppError {
   }
 }
 
+export class ProfileSeedSourceNotFoundError extends AppError {
+  constructor(sourceType: string, identifier: string) {
+    super(
+      "ProfileSeedSourceNotFoundError",
+      `Profile seed source not found: ${sourceType} '${identifier}'`,
+      { sourceType, identifier, recommendedAction: "Verify the source exists and is accessible" },
+    );
+  }
+}
+
+export class ProfileSeedCopyError extends AppError {
+  constructor(sourceDir: string, targetDir: string, cause?: unknown) {
+    super(
+      "ProfileSeedCopyError",
+      `Failed to materialize seeded profile from '${sourceDir}' to '${targetDir}'`,
+      {
+        sourceDir,
+        targetDir,
+        recommendedAction: "Verify the source is readable and the profiles root is writable",
+        rawError: cause,
+      },
+    );
+  }
+}
+
+export class InvalidProfileSourceError extends AppError {
+  constructor(type: string) {
+    super(
+      "InvalidProfileSourceError",
+      `Unsupported profileSource type: '${type}'`,
+      { type, recommendedAction: "Use one of: managed-empty, external-profile, session" },
+    );
+  }
+}
+
 export function mapKnownError(err: unknown): AppError {
   if (err instanceof AppError) return err;
   const message = err instanceof Error ? err.message : String(err);

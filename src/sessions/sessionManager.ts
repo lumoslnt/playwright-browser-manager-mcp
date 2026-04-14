@@ -3,7 +3,12 @@ import type { ChildProcessManager } from "../child/childProcessManager.js";
 import { SessionNotFoundError } from "../infra/errors.js";
 import type { ProfileManager } from "../profiles/profileManager.js";
 import type { SessionStore } from "./sessionStore.js";
-import type { PersistedSession, ProfileMode, SessionRecord } from "./sessionTypes.js";
+import type {
+  PersistedSession,
+  ProfileMode,
+  ProfileSourceRecord,
+  SessionRecord,
+} from "./sessionTypes.js";
 
 export class SessionManager {
   private readonly sessions = new Map<string, SessionRecord>();
@@ -39,6 +44,7 @@ export class SessionManager {
     headless?: boolean;
     executablePath?: string;
     profileMode?: ProfileMode;
+    profileSource?: ProfileSourceRecord;
   }): Promise<SessionRecord> {
     for (const s of this.sessions.values()) {
       if (s.name === input.name) {
@@ -47,10 +53,10 @@ export class SessionManager {
     }
 
     const profileMode: ProfileMode = input.profileMode ?? "persistent";
-    const profileDir =
-      profileMode === "isolated"
-        ? await this.profiles.createIsolatedProfileDir()
-        : this.profiles.resolveProfileDir(input.profile ?? input.name);
+    const profileSource: ProfileSourceRecord = input.profileSource ?? { type: "managed-empty" };
+
+    const { profileDir, seededFromSessionId, seededFromExternalProfilePath, materializedAt } =
+      await this.resolveProfileDir(profileSource, profileMode, input.profile ?? input.name);
 
     const now = new Date().toISOString();
     const session: SessionRecord = {
@@ -73,11 +79,81 @@ export class SessionManager {
       childToolCatalog: null,
       generation: 0,
       profileMode,
+      profileSource,
+      seededFromSessionId,
+      seededFromExternalProfilePath,
+      materializedAt,
     };
 
     this.sessions.set(session.id, session);
     await this.persist();
     return session;
+  }
+
+  private async resolveProfileDir(
+    profileSource: ProfileSourceRecord,
+    profileMode: ProfileMode,
+    fallbackName: string,
+  ): Promise<{
+    profileDir: string;
+    seededFromSessionId?: string;
+    seededFromExternalProfilePath?: string;
+    materializedAt?: string;
+  }> {
+    if (profileSource.type === "managed-empty") {
+      const profileDir =
+        profileMode === "isolated"
+          ? await this.profiles.createIsolatedProfileDir()
+          : this.profiles.resolveProfileDir(fallbackName);
+      return { profileDir };
+    }
+
+    if (profileSource.type === "external-profile") {
+      const profileDir = await this.profiles.materializeFromExternalProfile(profileSource);
+      const seededFromExternalProfilePath =
+        "path" in profileSource ? profileSource.path : undefined;
+      return {
+        profileDir,
+        seededFromExternalProfilePath,
+        materializedAt: new Date().toISOString(),
+      };
+    }
+
+    if (profileSource.type === "session") {
+      const sourceSession = this.getSession(profileSource.sessionId);
+      const profileDir = await this.profiles.materializeFromSessionProfile(
+        sourceSession.profileDir,
+      );
+      return {
+        profileDir,
+        seededFromSessionId: profileSource.sessionId,
+        materializedAt: new Date().toISOString(),
+      };
+    }
+
+    // TypeScript exhaustive check
+    const _never: never = profileSource;
+    throw new Error(`Unknown profileSource type: ${(_never as any).type}`);
+  }
+
+  async forkSession(input: {
+    sourceSessionId: string;
+    name: string;
+    browserType?: "chrome" | "msedge" | "chromium";
+    profileMode?: ProfileMode;
+    headless?: boolean;
+    executablePath?: string;
+  }): Promise<SessionRecord> {
+    // Verify source exists before delegating (gives a nicer error location)
+    this.getSession(input.sourceSessionId);
+    return this.createSession({
+      name: input.name,
+      browserType: input.browserType ?? "chrome",
+      profileMode: input.profileMode,
+      headless: input.headless,
+      executablePath: input.executablePath,
+      profileSource: { type: "session", sessionId: input.sourceSessionId },
+    });
   }
 
   listSessions(): SessionRecord[] {
@@ -112,7 +188,6 @@ export class SessionManager {
     if (session.profileMode === "isolated") {
       await this.profiles.deleteIsolatedProfileDir(session.profileDir);
     } else if (session.usingFallbackProfile && session.profileDir !== session.originalProfileDir) {
-      // Clean up the temporary fallback-isolated dir too
       await this.profiles.deleteIsolatedProfileDir(session.profileDir);
     }
     session.lastUsedAt = new Date().toISOString();

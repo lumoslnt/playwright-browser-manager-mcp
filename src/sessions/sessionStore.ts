@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PersistedSession, SessionRecord } from "./sessionTypes.js";
+import type { PersistedSession, ProfileSourceRecord, SessionRecord } from "./sessionTypes.js";
 
 export class SessionStore {
   constructor(private readonly filePath: string) {}
@@ -14,6 +14,7 @@ export class SessionStore {
         ...s,
         generation: s.generation ?? 0,
         profileMode: s.profileMode ?? "persistent",
+        profileSource: (s.profileSource as ProfileSourceRecord | undefined) ?? { type: "managed-empty" },
       })) as PersistedSession[];
     } catch {
       return [];
@@ -44,6 +45,10 @@ export class SessionStore {
         lastError: s.lastError,
         generation: s.generation,
         profileMode: s.profileMode,
+        profileSource: s.profileSource,
+        seededFromSessionId: s.seededFromSessionId,
+        seededFromExternalProfilePath: s.seededFromExternalProfilePath,
+        materializedAt: s.materializedAt,
       });
     }
 

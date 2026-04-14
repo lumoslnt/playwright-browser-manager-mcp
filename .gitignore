@@ -28,6 +28,7 @@ Thumbs.db
 docs/
 .claude/
 research/
+e2e/
 
 # Editor / IDE
 .vscode/

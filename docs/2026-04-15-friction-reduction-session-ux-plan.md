@@ -287,6 +287,22 @@ On Windows especially, this can lead to:
 - clone success followed by launch failure
 - misleading "created" results that fail on first use
 
+## Important scope boundary
+
+This section applies to:
+
+- **managed-session source**: a source session already owned by `playwright-browser-manager-mcp`
+
+This section does **not** apply to:
+
+- **external-profile source**: a user’s own Chrome/Edge profile such as `Default`
+
+That distinction is critical.
+
+For a managed-session source, the tool can safely coordinate browser lifecycle because it owns that browser process.
+
+For an external-profile source, the tool must **not** close or restart the user’s own browser window just to make cloning easier.
+
 ## Decision
 
 Adopt the lower-friction behavior:
@@ -305,6 +321,19 @@ When `fork_session` is called:
    - if the close was tool-initiated for forking, optionally restore the source session to its prior ready state after cloning
 4. create the forked session from the clone
 5. warm-launch the forked session so `ready` is real
+
+## User-visible semantics
+
+If the source session is a live managed browser session, the browser window for that managed source session may be temporarily closed and then reopened as part of the fork flow.
+
+This is acceptable because the manager owns that browser process.
+
+However, this must be documented clearly so callers understand that "low friction" here means:
+
+- no manual pre-close step is required from the caller
+- but the source managed session may experience a short interruption
+
+The fork flow must **not** claim to be non-disruptive to the managed source session.
 
 ## Why this is lower friction
 
@@ -345,6 +374,21 @@ Rationale:
 - the fork itself is the user’s requested primary action
 - failure to restore the original session is secondary and should not necessarily invalidate the fork if the fork succeeded
 
+### Suggested result metadata
+
+To make the side effects observable, `fork_session` should consider returning metadata such as:
+
+- `sourceWasActive: boolean`
+- `sourceWasTemporarilyClosed: boolean`
+- `sourceRestored: boolean`
+- `warnings: []`
+
+This helps callers distinguish between:
+
+- source never needed coordination
+- source was coordinated successfully
+- fork succeeded but source restoration failed
+
 ### New metadata (optional)
 
 Optionally track whether a session was:
@@ -361,6 +405,32 @@ This may help with debugging but is not required for the first pass.
 ## Problem
 
 For seeded sessions (`external-profile` and `session`), profile locks often indicate that the current materialized clone is not safely reusable.
+
+## Important source distinction
+
+The recovery path must behave differently depending on the seed source.
+
+### `external-profile`
+
+This means a user-owned browser profile, such as Chrome `Default`.
+
+For this source type, the manager must:
+
+- never close the user’s own browser window
+- never restart the user’s own browser process
+- treat cloning from a live external profile as best-effort
+
+The risk in this path is not user disruption; the risk is clone consistency when the external browser is still running.
+
+### `session`
+
+This means another managed session already owned by the manager.
+
+For this source type, the manager may coordinate lifecycle by:
+
+- temporarily closing the managed source session
+- cloning safely
+- attempting restoration afterward
 
 Current fallback logic only becomes helpful if `profileMode === "fallback-isolated"`, which is not always aligned with the user’s real intent.
 
@@ -384,6 +454,12 @@ If launch/warmup fails with a profile lock and the session is seeded:
 3. update `session.profileDir`
 4. update `session.launchConfig.profileDir`
 5. retry launch/warmup once
+
+Important constraint:
+
+- do not close or restart the user’s own Chrome/Edge window as part of this retry
+
+If the live external profile is too inconsistent to clone reliably while open, the system may surface a best-effort warning or recommend a user-guided cold retry, but it must not silently disrupt the user’s browser.
 
 ### For `session`
 
@@ -662,7 +738,7 @@ The caller does not need to remember a UUID.
 
 ---
 
-## Example 3: fork from a running source session
+## Example 3: fork from a running managed source session
 
 ```json
 fork_session({
@@ -679,6 +755,60 @@ Expected internal behavior:
 4. restore source if it was active before
 5. warm-launch fork
 6. return a truly usable `ready` fork
+
+Possible result shape:
+
+```json
+{
+  "sessionId": "new-fork-id",
+  "name": "flightreview-admin-2-copy",
+  "sessionRef": "flightreview-admin-2-copy",
+  "status": "ready",
+  "sourceWasActive": true,
+  "sourceWasTemporarilyClosed": true,
+  "sourceRestored": true,
+  "warnings": []
+}
+```
+
+---
+
+## Example 4: create from a live external Chrome profile
+
+```json
+create_session({
+  "name": "flightreview-admin-2",
+  "profileSource": {
+    "type": "external-profile",
+    "browser": "chrome",
+    "profile": "default"
+  }
+})
+```
+
+Expected semantics:
+
+1. resolve the user’s external Chrome profile
+2. clone it into a managed profile directory
+3. never close or restart the user’s own Chrome window
+4. warm-launch the managed session against the clone
+
+Possible warning semantics when cloning from a live profile:
+
+```json
+{
+  "sessionId": "9c624080-fe1d-463f-9398-9d60eaaaac9d",
+  "name": "flightreview-admin-2",
+  "sessionRef": "flightreview-admin-2",
+  "status": "ready",
+  "warnings": [
+    {
+      "code": "LiveExternalProfileClone",
+      "message": "The session was seeded from a live external browser profile. Clone consistency is best-effort while the source browser remains open."
+    }
+  ]
+}
+```
 
 ---
 
@@ -713,6 +843,8 @@ Add tests for:
 7. fork from running source closes/clones/restores correctly
 8. source restore failure does not necessarily invalidate successful fork
 9. profile lock moves seeded sessions toward re-materialization rather than empty fallback
+10. external-profile creation never attempts to close or restart the user’s own browser
+11. `fork_session` result metadata reports whether source coordination/restoration occurred
 
 ---
 

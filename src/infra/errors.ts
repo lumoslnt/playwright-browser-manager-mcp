@@ -109,7 +109,7 @@ export class InvalidProfileSourceError extends AppError {
     super(
       "InvalidProfileSourceError",
       `Unsupported profileSource type: '${type}'`,
-      { type, recommendedAction: "Use one of: managed-empty, external-profile, session" },
+      { type, recommendedAction: "Use one of: managed-empty, session, live-browser-profile" },
     );
   }
 }

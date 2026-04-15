@@ -112,7 +112,7 @@ test("createSession with live-browser-profile stores profileDir and marks non-ma
 
   const pm = (manager as any).profiles as import("../profiles/profileManager.js").ProfileManager;
   (pm as any).browserUserDataRoot = (_browser: string) => fakeUserData;
-  (pm as any).chromeBinaryPath = () => fakeBin;
+  (pm as any).chromeBinaryPaths = () => [fakeBin];
 
   const session = await manager.createSession({
     name: "live-chrome",
@@ -141,7 +141,7 @@ test("forkSession throws UnsupportedOperationError when source is a live-profile
 
   const pm = (manager as any).profiles as import("../profiles/profileManager.js").ProfileManager;
   (pm as any).browserUserDataRoot = (_browser: string) => fakeUserData;
-  (pm as any).chromeBinaryPath = () => fakeBin;
+  (pm as any).chromeBinaryPaths = () => [fakeBin];
 
   const src = await manager.createSession({
     name: "live-src",
@@ -166,7 +166,7 @@ test("closeSession for live-profile does not delete the profile directory", asyn
 
   const pm = (manager as any).profiles as import("../profiles/profileManager.js").ProfileManager;
   (pm as any).browserUserDataRoot = (_browser: string) => fakeUserData;
-  (pm as any).chromeBinaryPath = () => fakeBin;
+  (pm as any).chromeBinaryPaths = () => [fakeBin];
 
   const session = await manager.createSession({
     name: "live-close",
@@ -192,7 +192,7 @@ test("createSession with live-browser-profile rejects incompatible browserType",
 
   const pm = (manager as any).profiles as import("../profiles/profileManager.js").ProfileManager;
   (pm as any).browserUserDataRoot = (_browser: string) => fakeUserData;
-  (pm as any).chromeBinaryPath = () => fakeBin;
+  (pm as any).chromeBinaryPaths = () => [fakeBin];
 
   await expect(
     manager.createSession({

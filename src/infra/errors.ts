@@ -115,12 +115,13 @@ export class InvalidProfileSourceError extends AppError {
 }
 
 export class ChromeNotInstalledError extends AppError {
-  constructor(expectedPath: string) {
+  constructor(searchedPaths: string | string[]) {
+    const paths = Array.isArray(searchedPaths) ? searchedPaths : [searchedPaths];
     super(
       "ChromeNotInstalledError",
-      `Chrome executable not found at: ${expectedPath}`,
+      `Chrome executable not found. Searched: ${paths.join(", ")}`,
       {
-        expectedPath,
+        searchedPaths: paths,
         recommendedAction:
           "Install Google Chrome or use a managed session with browserType=chromium instead.",
       },

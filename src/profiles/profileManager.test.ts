@@ -74,8 +74,8 @@ test("resolveLiveBrowserProfile returns profileDir and executablePath when both 
     protected override browserUserDataRoot(_browser: "chrome" | "msedge"): string {
       return fakeUserData;
     }
-    protected override chromeBinaryPath(): string {
-      return fakeBin;
+    protected override chromeBinaryPaths(): string[] {
+      return [fakeBin];
     }
   }
 
@@ -99,8 +99,8 @@ test("resolveLiveBrowserProfile throws ChromeNotInstalledError when binary missi
     protected override browserUserDataRoot(_browser: "chrome" | "msedge"): string {
       return fakeUserData;
     }
-    protected override chromeBinaryPath(): string {
-      return "/does/not/exist/chrome.exe";
+    protected override chromeBinaryPaths(): string[] {
+      return ["/does/not/exist/chrome.exe"];
     }
   }
 
@@ -124,8 +124,8 @@ test("resolveLiveBrowserProfile throws ProfileSeedSourceNotFoundError when profi
     protected override browserUserDataRoot(_browser: "chrome" | "msedge"): string {
       return fakeUserData;
     }
-    protected override chromeBinaryPath(): string {
-      return fakeBin;
+    protected override chromeBinaryPaths(): string[] {
+      return [fakeBin];
     }
   }
 
@@ -149,8 +149,8 @@ test("resolveLiveBrowserProfile with profileName resolves named profile director
     protected override browserUserDataRoot(_browser: "chrome" | "msedge"): string {
       return fakeUserData;
     }
-    protected override chromeBinaryPath(): string {
-      return fakeBin;
+    protected override chromeBinaryPaths(): string[] {
+      return [fakeBin];
     }
   }
 
@@ -172,8 +172,8 @@ test("resolveLiveBrowserProfile rejects profileName with path traversal", async 
     protected override browserUserDataRoot(_browser: "chrome" | "msedge"): string {
       return fakeUserData;
     }
-    protected override chromeBinaryPath(): string {
-      return fakeBin;
+    protected override chromeBinaryPaths(): string[] {
+      return [fakeBin];
     }
   }
 

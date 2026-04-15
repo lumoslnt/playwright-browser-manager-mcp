@@ -7,9 +7,6 @@ import {
   ProfileSeedCopyError,
   ChromeNotInstalledError,
 } from "../infra/errors.js";
-import type { ProfileSourceRecord } from "../sessions/sessionTypes.js";
-
-type ExternalProfileInput = Extract<ProfileSourceRecord, { type: "external-profile" }>;
 
 export class ProfileManager {
   constructor(private readonly profilesRoot: string) {}
@@ -70,23 +67,30 @@ export class ProfileManager {
       : path.join(os.homedir(), ".config", "microsoft-edge");
   }
 
-  protected chromeBinaryPath(): string {
+  protected chromeBinaryPaths(): string[] {
     const { platform } = process;
     if (platform === "win32") {
+      const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
       const programFiles = process.env["PROGRAMFILES"] ?? "C:\\Program Files";
-      return `${programFiles}\\Google\\Chrome\\Application\\chrome.exe`;
+      const programFilesX86 = process.env["PROGRAMFILES(X86)"] ?? "C:\\Program Files (x86)";
+      const rel = "Google\\Chrome\\Application\\chrome.exe";
+      return [
+        path.join(localAppData, rel),
+        path.join(programFiles, rel),
+        path.join(programFilesX86, rel),
+      ];
     }
     if (platform === "darwin") {
-      return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+      return ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"];
     }
-    return "/usr/bin/google-chrome";
+    return ["/usr/bin/google-chrome"];
   }
 
   async resolveLiveBrowserProfile(
     input: { browser: "chrome"; profile: "default" } | { browser: "chrome"; profileName: string },
-  ): Promise<{ profileDir: string; executablePath: string }> {
+  ): Promise<{ profileDir: string; profileDirectoryName: string; userDataRoot: string; executablePath: string }> {
     const userDataRoot = this.browserUserDataRoot(input.browser);
-    let profileDir: string;
+    let profileDirectoryName: string;
 
     if ("profileName" in input) {
       const { profileName } = input;
@@ -105,10 +109,12 @@ export class ProfileManager {
       ) {
         throw new ProfileSeedSourceNotFoundError("live-browser-profile", profileName);
       }
-      profileDir = candidate;
+      profileDirectoryName = profileName;
     } else {
-      profileDir = path.join(userDataRoot, "Default");
+      profileDirectoryName = "Default";
     }
+
+    const profileDir = path.join(userDataRoot, profileDirectoryName);
 
     try {
       const stat = await fs.stat(profileDir);
@@ -117,96 +123,22 @@ export class ProfileManager {
       throw new ProfileSeedSourceNotFoundError("live-browser-profile", profileDir);
     }
 
-    const executablePath = this.chromeBinaryPath();
-    try {
-      await fs.access(executablePath);
-    } catch {
-      throw new ChromeNotInstalledError(executablePath);
-    }
-
-    return { profileDir, executablePath };
-  }
-
-  async resolveExternalProfile(input: ExternalProfileInput): Promise<string> {
-    let resolvedPath: string;
-
-    if ("path" in input) {
-      resolvedPath = input.path;
-    } else {
-      const userDataRoot = this.browserUserDataRoot(input.browser);
-      let profileSubdir: string;
-      if ("profileName" in input) {
-        profileSubdir = input.profileName;
-        // Prevent path traversal: profileName must be a single path segment with no separators
-        if (
-          profileSubdir.includes("..") ||
-          profileSubdir.includes("/") ||
-          profileSubdir.includes("\\")
-        ) {
-          throw new ProfileSeedSourceNotFoundError("external-profile", profileSubdir);
-        }
-        // Post-resolve boundary check: ensure resolved path stays within userDataRoot
-        const userDataRootResolved = path.resolve(userDataRoot);
-        const candidate = path.resolve(userDataRoot, profileSubdir);
-        if (!candidate.startsWith(userDataRootResolved + path.sep) && candidate !== userDataRootResolved) {
-          throw new ProfileSeedSourceNotFoundError("external-profile", profileSubdir);
-        }
-        resolvedPath = candidate;
-      } else {
-        // profile: "default"
-        resolvedPath = path.join(userDataRoot, "Default");
+    const searchedPaths = this.chromeBinaryPaths();
+    let executablePath: string | undefined;
+    for (const candidate of searchedPaths) {
+      try {
+        await fs.access(candidate);
+        executablePath = candidate;
+        break;
+      } catch {
+        // continue
       }
     }
-
-    try {
-      const stat = await fs.stat(resolvedPath);
-      if (!stat.isDirectory()) throw new Error("not a directory");
-    } catch {
-      throw new ProfileSeedSourceNotFoundError("external-profile", resolvedPath);
-    }
-    return resolvedPath;
-  }
-
-  private async createManagedCloneDir(baseName?: string): Promise<string> {
-    const name = baseName ? `clone-${baseName}-${randomUUID()}` : `clone-${randomUUID()}`;
-    const dir = path.join(this.profilesRoot, name);
-    await fs.mkdir(dir, { recursive: true });
-    return dir;
-  }
-
-  async materializeFromExternalProfile(
-    input: ExternalProfileInput,
-    targetName?: string,
-  ): Promise<{ targetDir: string; resolvedSourcePath: string }> {
-    const resolvedSourcePath = await this.resolveExternalProfile(input);
-    const targetDir = await this.createManagedCloneDir(targetName);
-
-    if ("browser" in input) {
-      // Browser-form: resolvedSourcePath is a profile subdirectory (e.g. Default/).
-      // Chromium is launched with targetDir as --user-data-dir, so it expects:
-      //   targetDir/Default/...   <- profile data
-      //   targetDir/Local State   <- encryption key (from userDataRoot, not the profile subdir)
-      const userDataRoot = this.browserUserDataRoot(input.browser);
-      const profileDestDir = path.join(targetDir, "Default");
-      await fs.mkdir(profileDestDir, { recursive: true });
-      await this.copyProfileDir(resolvedSourcePath, profileDestDir);
-      await this.copyLocalState(userDataRoot, targetDir);
-    } else {
-      // Path-form: caller provides an explicit path; copy verbatim into targetDir.
-      await this.copyProfileDir(resolvedSourcePath, targetDir);
+    if (!executablePath) {
+      throw new ChromeNotInstalledError(searchedPaths);
     }
 
-    return { targetDir, resolvedSourcePath };
-  }
-
-  private async copyLocalState(userDataRoot: string, cloneDir: string): Promise<void> {
-    const src = path.join(userDataRoot, "Local State");
-    const dst = path.join(cloneDir, "Local State");
-    try {
-      await fs.copyFile(src, dst);
-    } catch {
-      // No Local State in userDataRoot — skip silently.
-    }
+    return { profileDir: userDataRoot, profileDirectoryName, userDataRoot, executablePath };
   }
 
   async materializeFromSessionProfile(
@@ -219,7 +151,9 @@ export class ProfileManager {
     } catch {
       throw new ProfileSeedSourceNotFoundError("session", sourceProfileDir);
     }
-    const targetDir = await this.createManagedCloneDir(targetName);
+    const name = targetName ? `clone-${targetName}-${randomUUID()}` : `clone-${randomUUID()}`;
+    const targetDir = path.join(this.profilesRoot, name);
+    await fs.mkdir(targetDir, { recursive: true });
     await this.copyProfileDir(sourceProfileDir, targetDir);
     return targetDir;
   }

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import {
   ProfileSeedSourceNotFoundError,
   ProfileSeedCopyError,
+  ChromeNotInstalledError,
 } from "../infra/errors.js";
 import type { ProfileSourceRecord } from "../sessions/sessionTypes.js";
 
@@ -69,6 +70,63 @@ export class ProfileManager {
       : path.join(os.homedir(), ".config", "microsoft-edge");
   }
 
+  protected chromeBinaryPath(): string {
+    const { platform } = process;
+    if (platform === "win32") {
+      const programFiles = process.env["PROGRAMFILES"] ?? "C:\\Program Files";
+      return `${programFiles}\\Google\\Chrome\\Application\\chrome.exe`;
+    }
+    if (platform === "darwin") {
+      return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    }
+    return "/usr/bin/google-chrome";
+  }
+
+  async resolveLiveBrowserProfile(
+    input: { browser: "chrome"; profile: "default" } | { browser: "chrome"; profileName: string },
+  ): Promise<{ profileDir: string; executablePath: string }> {
+    const userDataRoot = this.browserUserDataRoot(input.browser);
+    let profileDir: string;
+
+    if ("profileName" in input) {
+      const { profileName } = input;
+      if (
+        profileName.includes("..") ||
+        profileName.includes("/") ||
+        profileName.includes("\\")
+      ) {
+        throw new ProfileSeedSourceNotFoundError("live-browser-profile", profileName);
+      }
+      const userDataRootResolved = path.resolve(userDataRoot);
+      const candidate = path.resolve(userDataRoot, profileName);
+      if (
+        !candidate.startsWith(userDataRootResolved + path.sep) &&
+        candidate !== userDataRootResolved
+      ) {
+        throw new ProfileSeedSourceNotFoundError("live-browser-profile", profileName);
+      }
+      profileDir = candidate;
+    } else {
+      profileDir = path.join(userDataRoot, "Default");
+    }
+
+    try {
+      const stat = await fs.stat(profileDir);
+      if (!stat.isDirectory()) throw new Error("not a directory");
+    } catch {
+      throw new ProfileSeedSourceNotFoundError("live-browser-profile", profileDir);
+    }
+
+    const executablePath = this.chromeBinaryPath();
+    try {
+      await fs.access(executablePath);
+    } catch {
+      throw new ChromeNotInstalledError(executablePath);
+    }
+
+    return { profileDir, executablePath };
+  }
+
   async resolveExternalProfile(input: ExternalProfileInput): Promise<string> {
     let resolvedPath: string;
 
@@ -122,40 +180,33 @@ export class ProfileManager {
   ): Promise<{ targetDir: string; resolvedSourcePath: string }> {
     const resolvedSourcePath = await this.resolveExternalProfile(input);
     const targetDir = await this.createManagedCloneDir(targetName);
-    await this.copyProfileDir(resolvedSourcePath, targetDir);
-    if (process.platform === "win32" && "browser" in input) {
-      await this.patchLocalStateCryptKey(this.browserUserDataRoot(input.browser), targetDir);
+
+    if ("browser" in input) {
+      // Browser-form: resolvedSourcePath is a profile subdirectory (e.g. Default/).
+      // Chromium is launched with targetDir as --user-data-dir, so it expects:
+      //   targetDir/Default/...   <- profile data
+      //   targetDir/Local State   <- encryption key (from userDataRoot, not the profile subdir)
+      const userDataRoot = this.browserUserDataRoot(input.browser);
+      const profileDestDir = path.join(targetDir, "Default");
+      await fs.mkdir(profileDestDir, { recursive: true });
+      await this.copyProfileDir(resolvedSourcePath, profileDestDir);
+      await this.copyLocalState(userDataRoot, targetDir);
+    } else {
+      // Path-form: caller provides an explicit path; copy verbatim into targetDir.
+      await this.copyProfileDir(resolvedSourcePath, targetDir);
     }
+
     return { targetDir, resolvedSourcePath };
   }
 
-  private async patchLocalStateCryptKey(userDataRoot: string, cloneDir: string): Promise<void> {
-    const realLocalStatePath = path.join(userDataRoot, "Local State");
-    const cloneLocalStatePath = path.join(cloneDir, "Local State");
-
-    let realLS: Record<string, unknown>;
+  private async copyLocalState(userDataRoot: string, cloneDir: string): Promise<void> {
+    const src = path.join(userDataRoot, "Local State");
+    const dst = path.join(cloneDir, "Local State");
     try {
-      realLS = JSON.parse(await fs.readFile(realLocalStatePath, "utf-8")) as Record<string, unknown>;
+      await fs.copyFile(src, dst);
     } catch {
-      return; // no real Local State to copy from — skip silently
+      // No Local State in userDataRoot — skip silently.
     }
-
-    const realOsCrypt = realLS["os_crypt"] as Record<string, unknown> | undefined;
-    const encryptedKey = realOsCrypt?.["encrypted_key"];
-    if (typeof encryptedKey !== "string") return;
-
-    let cloneLS: Record<string, unknown>;
-    try {
-      cloneLS = JSON.parse(await fs.readFile(cloneLocalStatePath, "utf-8")) as Record<string, unknown>;
-    } catch {
-      cloneLS = {};
-    }
-
-    const cloneOsCrypt = (cloneLS["os_crypt"] ?? {}) as Record<string, unknown>;
-    cloneOsCrypt["encrypted_key"] = encryptedKey;
-    cloneLS["os_crypt"] = cloneOsCrypt;
-
-    await fs.writeFile(cloneLocalStatePath, JSON.stringify(cloneLS));
   }
 
   async materializeFromSessionProfile(

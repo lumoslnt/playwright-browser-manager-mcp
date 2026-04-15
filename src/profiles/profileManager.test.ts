@@ -159,32 +159,24 @@ test("materializeFromSessionProfile throws ProfileSeedSourceNotFoundError when d
 
 // --- Local State os_crypt key patching ---
 
-test("materializeFromExternalProfile with browser form patches os_crypt.encrypted_key on win32", async () => {
+test("materializeFromExternalProfile with browser form produces user-data-dir layout on win32", async () => {
   if (process.platform !== "win32") return;
 
   // Simulate Chrome User Data root:
-  //   fakeUserData/Local State          <- has the real AES key
-  //   fakeUserData/Default/Cookies      <- cookies encrypted with that key
+  //   fakeUserData/Local State          <- has the real AES key (top-level)
+  //   fakeUserData/Default/Network/Cookies  <- cookies encrypted with that key
   const fakeUserData = await makeTempDir();
   const defaultProfile = path.join(fakeUserData, "Default");
-  await fs.mkdir(defaultProfile, { recursive: true });
+  const networkDir = path.join(defaultProfile, "Network");
+  await fs.mkdir(networkDir, { recursive: true });
 
   const realKey = "REAL_DPAPI_WRAPPED_KEY_BASE64";
   await fs.writeFile(
     path.join(fakeUserData, "Local State"),
     JSON.stringify({ os_crypt: { encrypted_key: realKey }, other: "preserved" }),
   );
-  await fs.writeFile(path.join(defaultProfile, "Cookies"), "encrypted-cookie-data");
+  await fs.writeFile(path.join(networkDir, "Cookies"), "encrypted-cookie-data");
 
-  // Use explicit-path form pointing at fakeUserData so we can inject a known userDataRoot.
-  // We need the browser-form to trigger the patch, so we stub browserUserDataRoot by
-  // pointing LOCALAPPDATA env var so Chrome resolves to fakeUserData's parent.
-  //
-  // Approach: pass the Default dir as explicit path, then manually verify the patch
-  // by testing the private method indirectly via the browser-form variant.
-  //
-  // We create a minimal ProfileManager subclass that overrides browserUserDataRoot to return
-  // our fake dir instead of the real Chrome location.
   const root = await makeTempDir();
 
   class TestProfileManager extends ProfileManager {
@@ -202,8 +194,10 @@ test("materializeFromExternalProfile with browser form patches os_crypt.encrypte
     profile: "default",
   });
 
+  // Clone must be a user-data-dir: Local State at root, profile data under Default/
   const clonedLS = JSON.parse(await fs.readFile(path.join(targetDir, "Local State"), "utf8"));
   expect(clonedLS.os_crypt.encrypted_key).toBe(realKey);
+  expect(await fs.readFile(path.join(targetDir, "Default", "Network", "Cookies"), "utf8")).toBe("encrypted-cookie-data");
 
   await cleanup(root, fakeUserData);
 });
@@ -234,4 +228,126 @@ test("materializeFromExternalProfile with path form does not patch Local State",
   expect(clonedLS.os_crypt.encrypted_key).toBe(originalKey);
 
   await cleanup(root, externalRoot);
+});
+
+// --- resolveLiveBrowserProfile ---
+
+test("resolveLiveBrowserProfile returns profileDir and executablePath when both exist", async () => {
+  const root = await makeTempDir();
+  const fakeUserData = await makeTempDir();
+  const defaultProfile = path.join(fakeUserData, "Default");
+  await fs.mkdir(defaultProfile, { recursive: true });
+
+  const fakeBin = path.join(root, "chrome.exe");
+  await fs.writeFile(fakeBin, "");
+
+  class TestProfileManager extends ProfileManager {
+    protected override browserUserDataRoot(_browser: "chrome" | "msedge"): string {
+      return fakeUserData;
+    }
+    protected override chromeBinaryPath(): string {
+      return fakeBin;
+    }
+  }
+
+  const pm = new TestProfileManager(root);
+  const result = await pm.resolveLiveBrowserProfile({ browser: "chrome", profile: "default" });
+
+  expect(result.profileDir).toBe(defaultProfile);
+  expect(result.executablePath).toBe(fakeBin);
+  await cleanup(root, fakeUserData);
+});
+
+test("resolveLiveBrowserProfile throws ChromeNotInstalledError when binary missing", async () => {
+  const root = await makeTempDir();
+  const fakeUserData = await makeTempDir();
+  const defaultProfile = path.join(fakeUserData, "Default");
+  await fs.mkdir(defaultProfile, { recursive: true });
+
+  class TestProfileManager extends ProfileManager {
+    protected override browserUserDataRoot(_browser: "chrome" | "msedge"): string {
+      return fakeUserData;
+    }
+    protected override chromeBinaryPath(): string {
+      return "/does/not/exist/chrome.exe";
+    }
+  }
+
+  const pm = new TestProfileManager(root);
+  const { ChromeNotInstalledError } = await import("../infra/errors.js");
+  await expect(
+    pm.resolveLiveBrowserProfile({ browser: "chrome", profile: "default" })
+  ).rejects.toBeInstanceOf(ChromeNotInstalledError);
+  await cleanup(root, fakeUserData);
+});
+
+test("resolveLiveBrowserProfile throws ProfileSeedSourceNotFoundError when profile dir missing", async () => {
+  const root = await makeTempDir();
+  const fakeUserData = await makeTempDir();
+  // No Default/ subdir created
+
+  const fakeBin = path.join(root, "chrome.exe");
+  await fs.writeFile(fakeBin, "");
+
+  class TestProfileManager extends ProfileManager {
+    protected override browserUserDataRoot(_browser: "chrome" | "msedge"): string {
+      return fakeUserData;
+    }
+    protected override chromeBinaryPath(): string {
+      return fakeBin;
+    }
+  }
+
+  const pm = new TestProfileManager(root);
+  await expect(
+    pm.resolveLiveBrowserProfile({ browser: "chrome", profile: "default" })
+  ).rejects.toMatchObject({ code: "ProfileSeedSourceNotFoundError" });
+  await cleanup(root, fakeUserData);
+});
+
+test("resolveLiveBrowserProfile with profileName resolves named profile directory", async () => {
+  const root = await makeTempDir();
+  const fakeUserData = await makeTempDir();
+  const namedProfile = path.join(fakeUserData, "Profile 1");
+  await fs.mkdir(namedProfile, { recursive: true });
+
+  const fakeBin = path.join(root, "chrome.exe");
+  await fs.writeFile(fakeBin, "");
+
+  class TestProfileManager extends ProfileManager {
+    protected override browserUserDataRoot(_browser: "chrome" | "msedge"): string {
+      return fakeUserData;
+    }
+    protected override chromeBinaryPath(): string {
+      return fakeBin;
+    }
+  }
+
+  const pm = new TestProfileManager(root);
+  const result = await pm.resolveLiveBrowserProfile({ browser: "chrome", profileName: "Profile 1" });
+
+  expect(result.profileDir).toBe(namedProfile);
+  await cleanup(root, fakeUserData);
+});
+
+test("resolveLiveBrowserProfile rejects profileName with path traversal", async () => {
+  const root = await makeTempDir();
+  const fakeUserData = await makeTempDir();
+  const fakeBin = path.join(root, "chrome.exe");
+  await fs.writeFile(fakeBin, "");
+
+  class TestProfileManager extends ProfileManager {
+    protected override browserUserDataRoot(_browser: "chrome" | "msedge"): string {
+      return fakeUserData;
+    }
+    protected override chromeBinaryPath(): string {
+      return fakeBin;
+    }
+  }
+
+  const pm = new TestProfileManager(root);
+  await expect(
+    pm.resolveLiveBrowserProfile({ browser: "chrome", profileName: "../../evil" })
+  ).rejects.toMatchObject({ code: "ProfileSeedSourceNotFoundError" });
+  await cleanup(root, fakeUserData);
 });

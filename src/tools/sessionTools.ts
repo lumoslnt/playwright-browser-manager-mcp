@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ProfileManager } from "../profiles/profileManager.js";
 import type { ToolRegistry } from "../server/toolRegistry.js";
 import type { SessionManager } from "../sessions/sessionManager.js";
+import type { SessionRecord } from "../sessions/sessionTypes.js";
 
 function text(data: unknown) {
   return {
@@ -9,23 +10,24 @@ function text(data: unknown) {
   };
 }
 
+function sessionMeta(s: SessionRecord) {
+  const isLive = s.profileSource.type === "live-browser-profile";
+  const warnings: string[] = [];
+  if (isLive) {
+    warnings.push("This session uses your real local Chrome profile directly — it is not isolated.");
+    warnings.push("Chrome must be closed before launching this session to avoid profile lock conflicts.");
+    warnings.push("This session is not forkable and not suitable for parallel multi-session use.");
+  }
+  return {
+    sessionRef: `${s.name} (${s.id.slice(0, 8)})`,
+    browserBinary: s.launchConfig.executablePath ?? null,
+    isolation: isLive ? "none" : s.profileMode === "isolated" ? "isolated" : "persistent",
+    warnings: warnings.length > 0 ? warnings : undefined,
+  };
+}
+
 const profileSourceSchema = z.union([
   z.object({ type: z.literal("managed-empty") }).strict(),
-  z.object({ type: z.literal("external-profile"), path: z.string().min(1) }).strict(),
-  z
-    .object({
-      type: z.literal("external-profile"),
-      browser: z.enum(["chrome", "msedge"]),
-      profile: z.literal("default"),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("external-profile"),
-      browser: z.enum(["chrome", "msedge"]),
-      profileName: z.string().min(1),
-    })
-    .strict(),
   z.object({ type: z.literal("session"), sessionId: z.string().min(1) }).strict(),
   z
     .object({
@@ -67,12 +69,11 @@ export function registerSessionTools(
           properties: {
             type: {
               type: "string",
-              enum: ["managed-empty", "external-profile", "session", "live-browser-profile"],
+              enum: ["managed-empty", "session", "live-browser-profile"],
             },
-            path: { type: "string", description: "Required when type=external-profile and using explicit path" },
-            browser: { type: "string", enum: ["chrome", "msedge"], description: "When type=external-profile or type=live-browser-profile, pick which browser's profile to use" },
-            profile: { type: "string", enum: ["default"], description: "When browser is set, use 'default' for the default profile" },
-            profileName: { type: "string", description: "When browser is set, use a named profile like 'Profile 1'" },
+            browser: { type: "string", enum: ["chrome"], description: "Required when type=live-browser-profile" },
+            profile: { type: "string", enum: ["default"], description: "Use 'default' for the browser's default profile" },
+            profileName: { type: "string", description: "Named profile directory, e.g. 'Profile 1'" },
             sessionId: { type: "string", description: "Required when type=session" },
           },
           required: ["type"],
@@ -103,6 +104,7 @@ export function registerSessionTools(
         seededFromSessionId: session.seededFromSessionId,
         seededFromExternalProfilePath: session.seededFromExternalProfilePath,
         materializedAt: session.materializedAt,
+        ...sessionMeta(session),
       });
     },
   });
@@ -172,6 +174,7 @@ export function registerSessionTools(
           createdAt: s.createdAt,
           lastUsedAt: s.lastUsedAt,
           lastError: s.lastError,
+          ...sessionMeta(s),
         })),
       ),
   });

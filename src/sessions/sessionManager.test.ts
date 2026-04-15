@@ -189,3 +189,84 @@ test("UnsupportedOperationError class exists with correct code and message", asy
   expect(err.code).toBe("UnsupportedOperationError");
   expect(err.message).toContain("fork_session");
 });
+
+// --- live-browser-profile ---
+
+test("createSession with live-browser-profile stores profileDir and marks non-managed", async () => {
+  const { root, profilesRoot, manager } = await makeEnv();
+
+  const fakeUserData = path.join(root, "fake-chrome-user-data");
+  const defaultProfile = path.join(fakeUserData, "Default");
+  await fs.mkdir(defaultProfile, { recursive: true });
+  const fakeBin = path.join(root, "chrome.exe");
+  await fs.writeFile(fakeBin, "");
+
+  const pm = (manager as any).profiles as import("../profiles/profileManager.js").ProfileManager;
+  (pm as any).browserUserDataRoot = (_browser: string) => fakeUserData;
+  (pm as any).chromeBinaryPath = () => fakeBin;
+
+  const session = await manager.createSession({
+    name: "live-chrome",
+    browserType: "chrome",
+    profileSource: { type: "live-browser-profile", browser: "chrome", profile: "default" },
+  });
+
+  expect(session.profileSource).toEqual({ type: "live-browser-profile", browser: "chrome", profile: "default" });
+  expect(session.profileDir).toBe(defaultProfile);
+  expect(session.managedProfile).toBe(false);
+  expect(session.supportsFork).toBe(false);
+  expect(session.launchConfig.executablePath).toBe(fakeBin);
+  expect(session.profileDir.startsWith(profilesRoot)).toBe(false);
+  await cleanup(root);
+});
+
+test("forkSession throws UnsupportedOperationError when source is a live-profile session", async () => {
+  const { root, manager } = await makeEnv();
+
+  const fakeUserData = path.join(root, "fake-chrome-user-data2");
+  const defaultProfile = path.join(fakeUserData, "Default");
+  await fs.mkdir(defaultProfile, { recursive: true });
+  const fakeBin = path.join(root, "chrome2.exe");
+  await fs.writeFile(fakeBin, "");
+
+  const pm = (manager as any).profiles as import("../profiles/profileManager.js").ProfileManager;
+  (pm as any).browserUserDataRoot = (_browser: string) => fakeUserData;
+  (pm as any).chromeBinaryPath = () => fakeBin;
+
+  const src = await manager.createSession({
+    name: "live-src",
+    browserType: "chrome",
+    profileSource: { type: "live-browser-profile", browser: "chrome", profile: "default" },
+  });
+
+  await expect(
+    manager.forkSession({ sourceSessionId: src.id, name: "forked-live" }),
+  ).rejects.toMatchObject({ code: "UnsupportedOperationError" });
+  await cleanup(root);
+});
+
+test("closeSession for live-profile does not delete the profile directory", async () => {
+  const { root, manager } = await makeEnv();
+
+  const fakeUserData = path.join(root, "fake-chrome-user-data3");
+  const defaultProfile = path.join(fakeUserData, "Default");
+  await fs.mkdir(defaultProfile, { recursive: true });
+  const fakeBin = path.join(root, "chrome3.exe");
+  await fs.writeFile(fakeBin, "");
+
+  const pm = (manager as any).profiles as import("../profiles/profileManager.js").ProfileManager;
+  (pm as any).browserUserDataRoot = (_browser: string) => fakeUserData;
+  (pm as any).chromeBinaryPath = () => fakeBin;
+
+  const session = await manager.createSession({
+    name: "live-close",
+    browserType: "chrome",
+    profileSource: { type: "live-browser-profile", browser: "chrome", profile: "default" },
+  });
+
+  await manager.closeSession(session.id);
+
+  const stat = await fs.stat(defaultProfile);
+  expect(stat.isDirectory()).toBe(true);
+  await cleanup(root);
+});

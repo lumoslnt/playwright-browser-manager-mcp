@@ -85,7 +85,7 @@ test("createSession with browser+profileName always records resolved seededFromE
   // Must always contain the resolved real path, not undefined
   expect(session.seededFromExternalProfilePath).toBe(fakeProfileDir);
   expect(session.profileDir.startsWith(profilesRoot)).toBe(true);
-  const copied = await fs.readFile(path.join(session.profileDir, "Cookies"), "utf8");
+  const copied = await fs.readFile(path.join(session.profileDir, "Default", "Cookies"), "utf8");
   expect(copied).toBe("cookie-data");
 
   (pm as any).browserUserDataRoot = origBrowserRoot;
@@ -181,4 +181,11 @@ test("createSession with session source throws SessionNotFoundError for unknown 
     }),
   ).rejects.toMatchObject({ code: "SessionNotFoundError" });
   await cleanup(root);
+});
+
+test("UnsupportedOperationError class exists with correct code and message", async () => {
+  const { UnsupportedOperationError } = await import("../infra/errors.js");
+  const err = new UnsupportedOperationError("fork_session", "live-browser-profile");
+  expect(err.code).toBe("UnsupportedOperationError");
+  expect(err.message).toContain("fork_session");
 });

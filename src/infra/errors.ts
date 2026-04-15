@@ -114,6 +114,36 @@ export class InvalidProfileSourceError extends AppError {
   }
 }
 
+export class ChromeNotInstalledError extends AppError {
+  constructor(expectedPath: string) {
+    super(
+      "ChromeNotInstalledError",
+      `Chrome executable not found at: ${expectedPath}`,
+      {
+        expectedPath,
+        recommendedAction:
+          "Install Google Chrome or use a managed session with browserType=chromium instead.",
+      },
+    );
+  }
+}
+
+export class UnsupportedOperationError extends AppError {
+  constructor(operation: string, reason: string, details?: unknown) {
+    super(
+      "UnsupportedOperationError",
+      `${operation} is not supported: ${reason}`,
+      {
+        operation,
+        reason,
+        recommendedAction:
+          "Use a managed persistent session and log in there if you need reusable or forkable auth state.",
+        ...(details as object | undefined),
+      },
+    );
+  }
+}
+
 export function mapKnownError(err: unknown): AppError {
   if (err instanceof AppError) return err;
   const message = err instanceof Error ? err.message : String(err);

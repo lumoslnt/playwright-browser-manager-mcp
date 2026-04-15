@@ -4,19 +4,8 @@ import { z } from "zod";
 // We test the Zod schemas independently — no need to spin up the full MCP server.
 
 const profileSourceSchema = z.union([
-  z.object({ type: z.literal("managed-empty") }),
-  z.object({ type: z.literal("external-profile"), path: z.string().min(1) }),
-  z.object({
-    type: z.literal("external-profile"),
-    browser: z.enum(["chrome", "msedge"]),
-    profile: z.literal("default"),
-  }),
-  z.object({
-    type: z.literal("external-profile"),
-    browser: z.enum(["chrome", "msedge"]),
-    profileName: z.string().min(1),
-  }),
-  z.object({ type: z.literal("session"), sessionId: z.string().min(1) }),
+  z.object({ type: z.literal("managed-empty") }).strict(),
+  z.object({ type: z.literal("session"), sessionId: z.string().min(1) }).strict(),
 ]);
 
 const createSessionSchema = z.object({
@@ -43,30 +32,6 @@ test("createSessionSchema accepts no profileSource (backward compat)", () => {
   expect(r.profileSource).toBeUndefined();
 });
 
-test("createSessionSchema accepts external-profile source with path", () => {
-  const r = createSessionSchema.parse({
-    name: "s",
-    profileSource: { type: "external-profile", path: "C:\\Users\\alice\\Profile 2" },
-  });
-  expect(r.profileSource).toEqual({ type: "external-profile", path: "C:\\Users\\alice\\Profile 2" });
-});
-
-test("createSessionSchema accepts external-profile source with browser+default", () => {
-  const r = createSessionSchema.parse({
-    name: "s",
-    profileSource: { type: "external-profile", browser: "chrome", profile: "default" },
-  });
-  expect(r.profileSource).toEqual({ type: "external-profile", browser: "chrome", profile: "default" });
-});
-
-test("createSessionSchema accepts external-profile source with browser+profileName", () => {
-  const r = createSessionSchema.parse({
-    name: "s",
-    profileSource: { type: "external-profile", browser: "msedge", profileName: "Profile 1" },
-  });
-  expect(r.profileSource).toEqual({ type: "external-profile", browser: "msedge", profileName: "Profile 1" });
-});
-
 test("createSessionSchema accepts session source", () => {
   const r = createSessionSchema.parse({
     name: "s",
@@ -77,7 +42,16 @@ test("createSessionSchema accepts session source", () => {
 
 test("createSessionSchema rejects unknown type", () => {
   expect(() =>
-    createSessionSchema.parse({ name: "s", profileSource: { type: "external-direct", path: "/x" } }),
+    createSessionSchema.parse({ name: "s", profileSource: { type: "external-profile", path: "/x" } }),
+  ).toThrow();
+});
+
+test("createSessionSchema rejects live-browser-profile (removed)", () => {
+  expect(() =>
+    createSessionSchema.parse({
+      name: "s",
+      profileSource: { type: "live-browser-profile", browser: "chrome", profile: "default" },
+    }),
   ).toThrow();
 });
 

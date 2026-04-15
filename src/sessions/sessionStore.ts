@@ -15,8 +15,6 @@ export class SessionStore {
         generation: s.generation ?? 0,
         profileMode: s.profileMode ?? "persistent",
         profileSource: (s.profileSource as ProfileSourceRecord | undefined) ?? { type: "managed-empty" },
-        managedProfile: s.managedProfile ?? true,
-        supportsFork: s.supportsFork ?? true,
       })) as PersistedSession[];
     } catch {
       return [];
@@ -49,10 +47,7 @@ export class SessionStore {
         profileMode: s.profileMode,
         profileSource: s.profileSource,
         seededFromSessionId: s.seededFromSessionId,
-        seededFromExternalProfilePath: s.seededFromExternalProfilePath,
         materializedAt: s.materializedAt,
-        managedProfile: s.managedProfile,
-        supportsFork: s.supportsFork,
       });
     }
 

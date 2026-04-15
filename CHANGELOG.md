@@ -4,46 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## 0.3.0 - 2026-04-15
 
-### Added
-- `live-browser-profile` profile source type for `create_session`:
-  - Launches the real Chrome binary against the user's real local profile (no cloning)
-  - Supports `{ type: "live-browser-profile", browser: "chrome", profile: "default" }` and `{ type: "live-browser-profile", browser: "chrome", profileName: "Profile 1" }`
-  - Path traversal guard on `profileName` (same as `external-profile`)
-  - Resolves Chrome binary via OS-specific path (`chromeBinaryPath()`, overridable in tests)
-- `ChromeNotInstalledError` — thrown when the Chrome binary is not found at the expected path
-- `UnsupportedOperationError` — thrown when `fork_session` is called on a live-browser-profile session
-- `managedProfile` field on sessions: `false` for live-browser-profile (we don't own the profile), `true` for all managed sessions
-- `supportsFork` field on sessions: `false` for live-browser-profile (cannot snapshot a live profile), `true` for all managed sessions
-- Both new fields are persisted in `sessions.json` and exposed in `create_session` and `list_sessions` responses
-
 ### Changed
-- `fork_session` now throws `UnsupportedOperationError` when the source session is a live-browser-profile session
-- `close_session` for live-browser-profile sessions no longer attempts to delete the profile directory
-- `create_session` and `list_sessions` responses now include `managedProfile` and `supportsFork`
-- `profileSource` schema in `create_session` now includes `live-browser-profile` as a valid type
+- Dropped `live-browser-profile` profile source type. Investigation showed that launching `@playwright/mcp` against the real Chrome user-data root is blocked by profile lock, and CDP-attach to a running Chrome instance does not integrate with the child MCP process model. The recommended auth baseline is a managed persistent session: log in inside the session, then reuse or fork it.
+- `profileSource` now only accepts `managed-empty` and `session`
+- `isolation` field in `create_session` / `list_sessions` responses now correctly exposes `fallback-isolated` instead of collapsing it to `persistent`
+- Removed `managedProfile` and `supportsFork` fields from all session responses and persistence (they were only meaningful for the removed live-browser-profile type)
 
-### Security
-- `profileName` traversal guard applies to `live-browser-profile` (same as `external-profile`): rejects `..`, `/`, `\` in profile names and validates resolved path stays inside the browser user-data root
-
-## 0.2.2 - 2026-04-15
+## 0.2.0 - 2026-04-14
 
 ### Fixed
 - Chrome/Edge profile clones now use the correct user-data-dir layout so Chromium can find cookies.
-  When seeding from `profileSource: { type: "external-profile", browser: "chrome"|"msedge" }`, the
-  profile data is now placed under `<clone-dir>/Default/` and the browser's real `Local State`
+  Profile data is placed under `<clone-dir>/Default/` and the browser's real `Local State`
   (containing the DPAPI-wrapped AES key) is copied to `<clone-dir>/Local State`.
-  Previously the profile contents were placed directly in `<clone-dir>/`, causing Chromium to treat
-  the clone as an empty user-data root and create a fresh unauthenticated profile.
-
-## 0.2.1 - 2026-04-15
-
-### Fixed
 - Chrome/Edge profile clones now correctly decrypt cookies on Windows.
-  When seeding a session from an external browser profile (`profileSource: { type: "external-profile", browser: "chrome" | "msedge" }`),
-  the cloned profile directory now receives the correct `os_crypt.encrypted_key` from the browser's real `User Data/Local State`.
-  Previously, Chromium generated a fresh key for the clone, causing all copied cookie values (encrypted with the original DPAPI-wrapped AES key) to be silently discarded, resulting in unauthenticated sessions even when the user was logged in.
-
-## 0.2.0 - 2026-04-14
+  The cloned profile receives the correct `os_crypt.encrypted_key` from the browser's real `User Data/Local State`,
+  preventing silently discarded cookie values due to a mismatched DPAPI-wrapped AES key.
 
 ### Added
 - add `profileSource` support to `create_session`

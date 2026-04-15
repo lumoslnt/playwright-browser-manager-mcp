@@ -14,17 +14,20 @@ import { toChildToolCatalog } from "./childToolCatalog.js";
 export class ChildProcessManager {
   constructor(
     private readonly config: AppConfig,
-    // profiles is used in Task 10 for fallback-isolated profile dir creation
+    // profiles is used for fallback-isolated profile dir creation
     private readonly _profiles: ProfileManager,
   ) {}
 
   private childArgs(session: SessionRecord): string[] {
     const args = [...this.config.commandArgs];
-    args.push("--user-data-dir", session.profileDir);
+    // cross-spawn routes npx through cmd.exe on Windows and strips backslashes from args.
+    // Use forward slashes for all path arguments — Node and Chrome accept them on Windows.
+    const normPath = (p: string) => p.replace(/\\/g, "/");
+    args.push("--user-data-dir", normPath(session.profileDir));
     args.push("--browser", session.browserType);
     if (session.launchConfig.headless) args.push("--headless");
     if (session.launchConfig.executablePath) {
-      args.push("--executable-path", session.launchConfig.executablePath);
+      args.push("--executable-path", normPath(session.launchConfig.executablePath));
     }
     return args;
   }

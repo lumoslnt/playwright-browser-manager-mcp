@@ -13,12 +13,7 @@ export type ProfileMode = "persistent" | "isolated" | "fallback-isolated";
 
 export type ProfileSourceRecord =
   | { type: "managed-empty" }
-  | { type: "external-profile"; path: string }
-  | { type: "external-profile"; browser: "chrome" | "msedge"; profile: "default" }
-  | { type: "external-profile"; browser: "chrome" | "msedge"; profileName: string }
-  | { type: "session"; sessionId: string }
-  | { type: "live-browser-profile"; browser: "chrome"; profile: "default" }
-  | { type: "live-browser-profile"; browser: "chrome"; profileName: string };
+  | { type: "session"; sessionId: string };
 
 export interface LaunchConfig {
   browserType: "chrome" | "msedge" | "chromium";
@@ -38,6 +33,7 @@ export interface SessionRecord {
   id: string;
   name: string;
   browserType: "chrome" | "msedge" | "chromium";
+  /** Manager-owned profile root directory passed as --user-data-dir. */
   profileDir: string;
   originalProfileDir?: string;
   usingFallbackProfile?: boolean;
@@ -54,10 +50,7 @@ export interface SessionRecord {
   recoveryPromise?: Promise<void>;
   profileMode: ProfileMode;
   profileSource: ProfileSourceRecord;
-  managedProfile: boolean;
-  supportsFork: boolean;
   seededFromSessionId?: string;
-  seededFromExternalProfilePath?: string;
   materializedAt?: string;
 }
 
@@ -76,9 +69,6 @@ export interface PersistedSession {
   generation: number;
   profileMode: ProfileMode;
   profileSource: ProfileSourceRecord;
-  managedProfile: boolean;
-  supportsFork: boolean;
   seededFromSessionId?: string;
-  seededFromExternalProfilePath?: string;
   materializedAt?: string;
 }

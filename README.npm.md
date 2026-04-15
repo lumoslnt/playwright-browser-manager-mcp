@@ -2,50 +2,60 @@
 
 English | [简体中文](#简体中文)
 
-A Playwright MCP browser manager for multi-session browser automation.
-
-It adds a browser-management layer on top of `@playwright/mcp` for cases where multiple agents, threads, or workflows need separate browser state.
+A multi-session Playwright browser manager MCP server for multi-agent and multi-session browser automation.
 
 ## What problem does it solve?
 
-Plain `@playwright/mcp` works well for simple single-session workflows, but starts to hurt when multiple agents or sessions need browsers at the same time.
+Plain `@playwright/mcp` works well for simple single-session workflows, but starts to hurt when multiple agents, threads, or sessions need browsers at the same time.
 
 Common problems:
 
-- browser profile conflicts (`Browser is already in use`)
-- stale browser/page/context handles after browser closure (`Target page, context or browser has been closed`)
-- manual management of persistent vs isolated browser state
-- reconnect / restart logic leaking into the caller
-- difficulty reusing already-authenticated browser state safely
+- shared browser profiles conflict (`Browser is already in use`)
+- a browser gets closed and the session is left with stale page/context handles (`Target page, context or browser has been closed`)
+- callers have to manually manage persistent vs isolated browser state
+- reconnect/restart logic leaks into the agent or application layer
+- safely reusing already-authenticated browser state is awkward
 
-This package solves that by adding:
+This MCP solves that by adding a browser-management layer on top of Playwright MCP:
 
 - explicit browser sessions via `sessionId`
-- profile modes: `persistent`, `isolated`, `fallback-isolated`
+- profile isolation policies
+- profile modes (`persistent`, `isolated`, `fallback-isolated`)
 - lazy browser launch
 - managed session lifecycle
-- auto-healing retry for safe read-only browser calls
-- session/profile seeding from external browser profiles or existing managed sessions
+- auto-healing recovery for safe read-only browser calls
+- session forking from existing managed sessions
 
-## When to use it
+## Use this when
 
-Use this package if:
+Use this MCP if:
 
-- multiple agents, threads, or sessions need separate browser state
-- some sessions should keep login state while others should stay isolated
-- you want fewer manual reconnect / restart steps after browser crashes
-- plain Playwright MCP becomes awkward in multi-session workflows
-- you want to bootstrap a new session from an existing browser profile or an already-logged-in managed session
+- you run multiple agents or sessions that need their own browser state
+- you want some sessions to keep login state while others stay isolated
+- you hit profile lock errors with plain Playwright MCP
+- you want fewer manual reconnect / restart steps after a browser closes unexpectedly
+- you want to bootstrap a new session from an existing logged-in managed session
 
 ## Quick Start
 
-### Run the server
+### 1) Run the MCP server
+
+#### Option A: run with `npx`
 
 ```bash
 npx -y @linatang/playwright-browser-manager-mcp@latest
 ```
 
-### Add it to your MCP client
+#### Option B: install globally
+
+```bash
+npm install -g @linatang/playwright-browser-manager-mcp@latest
+playwright-browser-manager-mcp
+```
+
+---
+
+### 2) Add it to your MCP client
 
 ```json
 {
@@ -58,84 +68,95 @@ npx -y @linatang/playwright-browser-manager-mcp@latest
 }
 ```
 
-### Minimal flow
+If installed globally:
+
+```json
+{
+  "mcpServers": {
+    "playwright-browser-manager": {
+      "command": "playwright-browser-manager-mcp"
+    }
+  }
+}
+```
+
+---
+
+### 3) Minimal usage flow
 
 1. Call `create_session`
 2. Save the returned `sessionId`
 3. Call any routed browser tool with that `sessionId`
 
-Example:
+Example flow:
 
 - `create_session(name="work", profileMode="persistent")`
 - `browser_navigate(sessionId="...", url="https://example.com")`
 - `browser_snapshot(sessionId="...")`
 
+## How it works
+
+This server starts and manages one Playwright MCP child process per browser session.
+
+Each managed session has:
+
+- a stable `sessionId`
+- a profile policy (`persistent`, `isolated`, or `fallback-isolated`)
+- an optional bootstrap source (`managed-empty` or `session`)
+- lifecycle state (`idle`, `ready`, `recovering`, `broken`, etc.)
+- a routed tool surface that forwards Playwright browser calls to the right session
+
+In other words:
+
+- **without this MCP**: the caller has to think about browser lifecycle, profile collisions, and state reuse
+- **with this MCP**: the caller mainly thinks in terms of `sessionId` and browser tasks
+
 ## Key Features
 
-- **Explicit `sessionId` routing** — deterministic multi-session automation
-- **Profile modes** — persistent, isolated, or fallback-isolated browser state
-- **Session/profile seeding** — create a session from a cloned external browser profile or fork an existing managed session
-- **Lazy launch** — start browser only when needed
-- **Auto-healing recovery** — relaunch and retry once for safe read-only browser calls after browser closure
-- **Managed session lifecycle** — create, list, close, restart, and fork sessions
+- **Explicit `sessionId` routing**  
+  Deterministic multi-session automation with no session bleed.
+
+- **Profile modes**  
+  Choose the right browser-state policy per session.
+
+- **Session forking**  
+  Log in once in a managed session, then fork it to create independent copies with the same state.
+
+- **Lazy launch**  
+  Browser child process starts only when a browser tool is first used.
+
+- **Auto-healing recovery**  
+  If the browser closes unexpectedly during a safe read-only tool call, the manager tears down the stale child, relaunches, and retries once.
+
+- **Managed session lifecycle**  
+  Create, list, close, restart, and fork sessions explicitly.
+
+- **Startup tool discovery**  
+  Child Playwright MCP tools are discovered at startup and registered as routed tools.
 
 ## Profile Modes
 
-| Mode | Best for |
-|---|---|
-| `persistent` | keep login state, cookies, cache |
-| `isolated` | sandboxed or parallel browser tasks |
-| `fallback-isolated` | prefer persistent state, but fall back if the profile is locked |
+| Mode | Best for | Behavior |
+|---|---|---|
+| `persistent` | login state, long-lived browser sessions | Reuses a named local profile directory |
+| `isolated` | parallel tasks, sandboxed runs, throwaway sessions | Creates a fresh temporary profile for the session |
+| `fallback-isolated` | prefer persistent state, but avoid hard failure on lock conflicts | Tries the normal profile first, then falls back to a fresh isolated profile if the profile is locked |
 
-## Bootstrap a Session from Existing Browser State
+## Getting Auth State into a Managed Session
 
-This package supports initializing a new managed session from:
+The recommended approach is to log in directly inside a managed session, then reuse or fork it:
 
-1. a fresh empty managed profile
-2. a cloned external browser profile
-3. an existing managed session
-
-### `create_session` with `profileSource`
-
-Supported `profileSource` forms:
-
-- `{ "type": "managed-empty" }`
-- `{ "type": "external-profile", "path": "..." }`
-- `{ "type": "external-profile", "browser": "chrome", "profile": "default" }`
-- `{ "type": "external-profile", "browser": "msedge", "profileName": "Profile 1" }`
-- `{ "type": "session", "sessionId": "..." }`
-
-### Example: clone the default Chrome profile
+1. Create a persistent managed session
+2. Navigate to your site and log in normally
+3. Reuse that session for authenticated tasks, or fork it for parallel work
 
 ```json
-{
-  "name": "work-from-default-chrome",
-  "profileMode": "persistent",
-  "profileSource": {
-    "type": "external-profile",
-    "browser": "chrome",
-    "profile": "default"
-  }
-}
+{ "name": "auth-session", "profileMode": "persistent" }
 ```
 
-### Example: clone a named Edge profile
+### Forking: share auth state across parallel sessions
 
-```json
-{
-  "name": "work-from-edge-profile-1",
-  "profileMode": "persistent",
-  "profileSource": {
-    "type": "external-profile",
-    "browser": "msedge",
-    "profileName": "Profile 1"
-  }
-}
-```
-
-### Example: fork an existing managed session
-
-Use `fork_session` when you already have a logged-in managed session and want a new independent session with the same initial browser state.
+Use `fork_session` when you have a managed session with useful browser state (for example, an authenticated session) and want to create independent copies of it.
 
 ```json
 {
@@ -145,25 +166,30 @@ Use `fork_session` when you already have a logged-in managed session and want a 
 }
 ```
 
-## Security Model for Seeding
+### Seeding from an existing managed session
 
-This package intentionally **does not support external-direct profile mounting**.
+You can also initialize a new session from an existing managed session using `profileSource`:
 
-In other words:
+```json
+{
+  "name": "new-session",
+  "profileMode": "persistent",
+  "profileSource": { "type": "session", "sessionId": "session-123" }
+}
+```
 
-- it will **not** run a managed session directly on the user's live browser profile
-- external browser profiles are always **cloned into a new managed profile directory** first
-- forked sessions are also materialized into a new managed profile
+## Auto-Healing and Safe Retry
 
-This keeps the model safer and more stable for multi-session automation:
+When a safe read-only browser call fails because the underlying browser/page/context has already closed, the manager will:
 
-- avoids live profile lock conflicts
-- avoids directly mutating the user's original profile
-- keeps all managed sessions on manager-owned profile directories
+1. detect the browser-closed error
+2. tear down the stale child connection
+3. relaunch the browser session
+4. retry the failed tool call once
 
-## Safe Auto-Retry
+This automatic retry is intentionally limited to safer read-only tools to avoid accidentally double-running mutations.
 
-Automatic recovery currently applies to these safer read-only tools:
+Currently safe-retry tools include:
 
 - `browser_navigate`
 - `browser_snapshot`
@@ -172,9 +198,11 @@ Automatic recovery currently applies to these safer read-only tools:
 - `browser_network_requests`
 - `browser_wait_for`
 
-Mutating tools such as click, type, upload, drag, and submit-like interactions are not transparently retried.
+Mutating tools such as click, typing, upload, drag-and-drop, and submit-like interactions are **not** transparently retried.
 
-## Manager Tools
+## Session Lifecycle Tools
+
+This MCP exposes these manager-level tools:
 
 - `create_session`
 - `fork_session`
@@ -183,9 +211,29 @@ Mutating tools such as click, type, upload, drag, and submit-like interactions a
 - `restart_session`
 - `list_local_profiles`
 
-All routed Playwright browser tools require `sessionId`.
+All routed Playwright browser tools require a `sessionId`.
 
-## Install
+## Session Status Reference
+
+| Status | Meaning |
+|---|---|
+| `idle` | Session exists but browser has not started yet |
+| `launching` | Browser is starting |
+| `ready` | Browser is available and tools can run |
+| `recovering` | Browser/session is being relaunched after failure |
+| `closing` | Session is shutting down |
+| `closed` | Session is stopped and will relaunch on next use |
+| `error` | Last launch failed; manager will retry on next use |
+| `broken` | Session could not be recovered automatically |
+| `profile_locked` | Browser profile is locked by another process |
+
+## Requirements
+
+- Node.js 20+
+- npm
+- Network access for `npx @playwright/mcp@latest` unless already cached locally
+
+## Installation
 
 ### Global install
 
@@ -200,13 +248,14 @@ npm install
 npm run dev
 ```
 
-### Build
+### Build and run compiled output
 
 ```bash
 npm run build
+npm start
 ```
 
-### Test
+### Run tests
 
 ```bash
 npm test
@@ -214,21 +263,35 @@ npm test
 
 ## Environment Variables
 
-- `PSMCP_PROFILE_ROOT`
-- `PSMCP_DEFAULT_BROWSER`
-- `PSMCP_LOG_LEVEL`
-- `PSMCP_HEADLESS_DEFAULT`
-- `PSMCP_BROWSER_EXECUTABLE`
-- `PSMCP_PLAYWRIGHT_MCP_COMMAND`
-- `PSMCP_PLAYWRIGHT_MCP_ARGS`
+- `PSMCP_PROFILE_ROOT` — root directory for browser profiles and session metadata
+- `PSMCP_DEFAULT_BROWSER` — `chrome` | `msedge` | `chromium`
+- `PSMCP_LOG_LEVEL` — log verbosity
+- `PSMCP_HEADLESS_DEFAULT` — `true` | `false`
+- `PSMCP_BROWSER_EXECUTABLE` — explicit browser executable path
+- `PSMCP_PLAYWRIGHT_MCP_COMMAND` — override child MCP command
+- `PSMCP_PLAYWRIGHT_MCP_ARGS` — override child MCP args
 
 ## Troubleshooting
 
-- **`broken` session** — call `restart_session`
-- **`profile_locked` session** — use `profileMode: "fallback-isolated"`
-- **startup probe failure** — verify `npx` and `@playwright/mcp` are available
-- **browser launch failure** — check profile permissions or set `PSMCP_BROWSER_EXECUTABLE`
-- **profile seeding fails** — verify the source profile exists and is readable by the current OS user
+### Startup fails at probe discovery
+
+- make sure `npx` is available
+- verify `@playwright/mcp` can run on this machine
+- check outbound network access if you rely on `npx @playwright/mcp@latest`
+
+### Browser launch fails
+
+- check profile directory permissions
+- try a different `PSMCP_PROFILE_ROOT`
+- set `PSMCP_BROWSER_EXECUTABLE` if browser auto-detection is wrong
+
+### Session is `broken`
+
+Use `restart_session` to force-close and relaunch the session.
+
+### Session is `profile_locked`
+
+Another process may already be using the same browser profile. Create a session with `profileMode: "fallback-isolated"` if you want automatic fallback behavior.
 
 ## License
 
@@ -238,50 +301,60 @@ MIT
 
 # 简体中文
 
-一个面向多 session 浏览器自动化的 Playwright MCP browser manager。
+一个面向多 agent / 多 session 浏览器自动化场景的 Playwright Browser Manager MCP 服务。
 
-它在 `@playwright/mcp` 之上增加了一层浏览器管理能力，适合多个 agent、thread 或 workflow 同时需要各自独立浏览器状态的场景。
+## 这个 MCP 解决了什么问题？
 
-## 它解决什么问题？
+原生 `@playwright/mcp` 在**单会话**场景下很好用，但一旦你有多个 agent、多个 thread、多个 session 同时需要浏览器，问题就会开始出现。
 
-原生 `@playwright/mcp` 在单 session 场景下很好用，但一旦多个 agent 或 session 同时需要浏览器，就会开始变得别扭。
+典型痛点包括：
 
-常见问题包括：
+- 共享浏览器 profile 发生冲突（`Browser is already in use`）
+- 浏览器被关掉后，session 里还握着失效的 page/context 句柄（`Target page, context or browser has been closed`）
+- 调用方需要自己管理 persistent / isolated 两类浏览器状态
+- reconnect / restart 逻辑泄漏到 agent 或业务代码里
+- 想安全地复用已登录浏览器状态并不顺手
 
-- 浏览器 profile 冲突（`Browser is already in use`）
-- 浏览器关闭后，page/context 句柄失效（`Target page, context or browser has been closed`）
-- 调用方需要自己管理 persistent / isolated 浏览器状态
-- reconnect / restart 逻辑泄漏到业务层
-- 想复用已登录浏览器状态时不够安全也不够顺手
+这个 MCP 在 Playwright MCP 之上增加了一层 **浏览器管理能力**，核心包括：
 
-这个包补上的能力包括：
-
-- 用 `sessionId` 显式管理浏览器 session
+- 用 `sessionId` 显式管理浏览器会话
+- 用 profile policy 管理浏览器状态隔离
 - 支持 `persistent`、`isolated`、`fallback-isolated` 三种 profile 模式
 - 按需启动浏览器（lazy launch）
-- 受管 session 生命周期
-- 对安全只读浏览器调用提供自动恢复重试
-- 支持从外部浏览器 profile 或现有 managed session 做 session/profile seeding
+- 管理 session 生命周期
+- 对安全的只读调用提供自动恢复（auto-healing）
+- 支持从已有 managed session fork 新 session
 
-## 什么时候适合用
+## 什么时候该用它？
 
-如果你有这些需求，就适合用这个包：
+如果你有这些需求，就很适合用这个 MCP：
 
-- 多个 agent、thread 或 session 需要各自独立的浏览器状态
-- 有些 session 要保留登录态，有些要保持隔离
-- 你希望浏览器崩掉之后尽量少手动 reconnect / restart
-- 原生 Playwright MCP 在多 session 场景下已经开始不顺手
-- 你希望从已有浏览器 profile 或一个已登录的 managed session 快速启动新 session
+- 多个 agent / session 需要各自独立的浏览器状态
+- 有的 session 需要保留登录态，有的 session 需要隔离运行
+- 你经常遇到 Playwright profile 锁冲突
+- 你希望浏览器异常关闭后，尽量少手动 reconnect / restart
+- 你希望从已登录的 managed session fork 出新 session
 
 ## 快速开始
 
-### 启动服务
+### 1）运行 MCP 服务
+
+#### 方式 A：直接用 `npx`
 
 ```bash
 npx -y @linatang/playwright-browser-manager-mcp@latest
 ```
 
-### 在 MCP client 中配置
+#### 方式 B：全局安装
+
+```bash
+npm install -g @linatang/playwright-browser-manager-mcp@latest
+playwright-browser-manager-mcp
+```
+
+---
+
+### 2）在 MCP client 里配置它
 
 ```json
 {
@@ -294,84 +367,95 @@ npx -y @linatang/playwright-browser-manager-mcp@latest
 }
 ```
 
-### 最小使用流程
+如果是全局安装：
+
+```json
+{
+  "mcpServers": {
+    "playwright-browser-manager": {
+      "command": "playwright-browser-manager-mcp"
+    }
+  }
+}
+```
+
+---
+
+### 3）最小使用流程
 
 1. 调用 `create_session`
 2. 保存返回的 `sessionId`
-3. 所有浏览器工具调用都带上这个 `sessionId`
+3. 后续所有浏览器工具都带上这个 `sessionId`
 
-示例：
+示例流程：
 
 - `create_session(name="work", profileMode="persistent")`
 - `browser_navigate(sessionId="...", url="https://example.com")`
 - `browser_snapshot(sessionId="...")`
 
+## 它是怎么工作的？
+
+这个服务会为每个浏览器 session 启动并管理一个 Playwright MCP 子进程。
+
+每个受管 session 都有：
+
+- 一个稳定的 `sessionId`
+- 一个 profile 策略（`persistent`、`isolated`、`fallback-isolated`）
+- 一个可选的 bootstrap source（`managed-empty`、`session`）
+- 一套生命周期状态（`idle`、`ready`、`recovering`、`broken` 等）
+- 一组路由后的 Playwright browser tools
+
+可以简单理解成：
+
+- **没有这个 MCP**：调用方要自己处理浏览器生命周期、profile 冲突和状态复用
+- **有了这个 MCP**：调用方主要只需要围绕 `sessionId` 和浏览器任务来思考
+
 ## 核心特性
 
-- **显式 `sessionId` 路由** — 多 session 自动化更确定
-- **Profile 模式** — 支持 persistent / isolated / fallback-isolated
-- **Session/profile seeding** — 支持从外部浏览器 profile clone，或从已有 managed session fork
-- **Lazy launch** — 需要时才启动浏览器
-- **自动恢复** — 浏览器意外关闭后，对安全只读调用自动重试一次
-- **受管生命周期** — 显式创建、列出、关闭、重启、fork session
+- **显式 `sessionId` 路由**
+  多 session 调用更确定，不容易串会话。
 
-## Profile 模式
+- **Profile 模式**
+  每个 session 可以选择适合自己的浏览器状态策略。
 
-| 模式 | 适合场景 |
-|---|---|
-| `persistent` | 保留登录态、cookie、缓存 |
-| `isolated` | 沙盒任务、并行任务、一次性浏览器会话 |
-| `fallback-isolated` | 优先使用 persistent，但 profile 被占用时自动回退 |
+- **Session Fork**
+  在一个 managed session 里登录一次，然后 fork 出多个独立的子 session。
 
-## 从已有浏览器状态初始化新 session
+- **Lazy launch**
+  创建 session 时不立即启动浏览器，第一次真正调用浏览器工具时才启动。
 
-这个包支持用以下来源初始化一个新的 managed session：
+- **自动恢复（Auto-healing）**
+  如果浏览器在安全的只读调用过程中意外关闭，manager 会清理失效连接、重新拉起浏览器，并自动重试一次。
 
-1. 全新空白 managed profile
-2. clone 外部浏览器 profile
-3. 从已有 managed session fork
+- **受管 session 生命周期**
+  支持显式创建、列出、关闭、重启、fork session。
 
-### `create_session` 的 `profileSource`
+- **启动时自动发现子工具**
+  底层 Playwright MCP 暴露的 browser tools 会在启动时被发现并注册成路由工具。
 
-支持以下形式：
+## Profile 模式说明
 
-- `{ "type": "managed-empty" }`
-- `{ "type": "external-profile", "path": "..." }`
-- `{ "type": "external-profile", "browser": "chrome", "profile": "default" }`
-- `{ "type": "external-profile", "browser": "msedge", "profileName": "Profile 1" }`
-- `{ "type": "session", "sessionId": "..." }`
+| 模式 | 适合场景 | 行为 |
+|---|---|---|
+| `persistent` | 需要保留登录态、cookie、缓存 | 复用本地命名 profile 目录 |
+| `isolated` | 并行任务、沙盒任务、一次性会话 | 为当前 session 创建全新的临时 profile |
+| `fallback-isolated` | 希望优先使用 persistent，但 profile 被占用时不要直接失败 | 先尝试原 profile，若锁冲突则自动回退到新的 isolated profile |
 
-### 示例：clone 默认 Chrome profile
+## 如何把登录态带入 Managed Session
 
-```json
-{
-  "name": "work-from-default-chrome",
-  "profileMode": "persistent",
-  "profileSource": {
-    "type": "external-profile",
-    "browser": "chrome",
-    "profile": "default"
-  }
-}
-```
+推荐做法是直接在 managed session 里登录，然后复用或 fork 它：
 
-### 示例：clone 一个命名的 Edge profile
+1. 创建一个 `persistent` managed session
+2. 在里面打开网站，正常登录
+3. 复用这个 session 执行需要认证的任务，或者 fork 出多个并行 session
 
 ```json
-{
-  "name": "work-from-edge-profile-1",
-  "profileMode": "persistent",
-  "profileSource": {
-    "type": "external-profile",
-    "browser": "msedge",
-    "profileName": "Profile 1"
-  }
-}
+{ "name": "auth-session", "profileMode": "persistent" }
 ```
 
-### 示例：fork 一个已有的 managed session
+### Fork：在多个并行 session 间共享登录态
 
-当你已经有一个登录好的 managed session，希望基于它再开一个新的独立 session 时，使用 `fork_session`：
+当你已经有一个包含有用浏览器状态的 managed session（例如已经登录好的 session），希望再开一个新的独立 session 时，使用 `fork_session`：
 
 ```json
 {
@@ -381,25 +465,30 @@ npx -y @linatang/playwright-browser-manager-mcp@latest
 }
 ```
 
-## Seeding 的安全模型
+### 从已有 managed session 初始化
 
-这个包**明确不支持 external-direct profile mounting**。
+也可以用 `profileSource` 从已有 managed session 初始化一个新 session：
 
-也就是说：
+```json
+{
+  "name": "new-session",
+  "profileMode": "persistent",
+  "profileSource": { "type": "session", "sessionId": "session-123" }
+}
+```
 
-- 不会让 managed session 直接跑在用户正在使用的 live browser profile 上
-- 外部浏览器 profile 一律会先 clone 到新的 managed profile 目录
-- fork 出来的 session 也同样会 materialize 成新的 managed profile
+## 自动恢复与安全重试
 
-这样做的好处是：
+当安全的只读浏览器调用因为底层 browser/page/context 已关闭而失败时，manager 会：
 
-- 避免 live profile 锁冲突
-- 避免直接污染用户原 profile
-- 保证所有 managed session 都运行在 manager 自己拥有的 profile 目录上
+1. 识别浏览器已关闭的错误
+2. 清理失效的子进程连接
+3. 重新拉起浏览器 session
+4. 对失败的工具调用自动重试一次
 
-## 自动恢复的安全重试范围
+这个自动重试**只**适用于更安全的只读工具，避免对带副作用的操作重复执行。
 
-目前自动恢复只适用于更安全的只读工具：
+当前支持安全重试的工具包括：
 
 - `browser_navigate`
 - `browser_snapshot`
@@ -408,9 +497,11 @@ npx -y @linatang/playwright-browser-manager-mcp@latest
 - `browser_network_requests`
 - `browser_wait_for`
 
-像点击、输入、上传、拖拽、提交等可能产生副作用的工具，不会被透明自动重试。
+像点击、输入、上传、拖拽、提交一类可能产生副作用的工具，**不会**被透明自动重试。
 
-## Manager 级工具
+## Session 管理工具
+
+这个 MCP 额外提供这些 manager 级工具：
 
 - `create_session`
 - `fork_session`
@@ -419,7 +510,27 @@ npx -y @linatang/playwright-browser-manager-mcp@latest
 - `restart_session`
 - `list_local_profiles`
 
-所有被路由的 Playwright browser tools 都需要传入 `sessionId`。
+所有被路由的 Playwright browser tools 都要求传入 `sessionId`。
+
+## Session 状态说明
+
+| 状态 | 含义 |
+|---|---|
+| `idle` | session 已创建，但浏览器还没启动 |
+| `launching` | 浏览器正在启动 |
+| `ready` | 浏览器可用，可以执行工具调用 |
+| `recovering` | 浏览器异常后，manager 正在恢复 |
+| `closing` | session 正在关闭 |
+| `closed` | session 已停止，下次使用时会重新拉起 |
+| `error` | 上次启动失败，下次使用时 manager 会再试一次 |
+| `broken` | 自动恢复失败，需要人工干预 |
+| `profile_locked` | profile 被其他进程占用 |
+
+## 运行要求
+
+- Node.js 20+
+- npm
+- 如果依赖 `npx @playwright/mcp@latest`，需要机器可以联网
 
 ## 安装
 
@@ -436,13 +547,14 @@ npm install
 npm run dev
 ```
 
-### 构建
+### 构建并运行编译产物
 
 ```bash
 npm run build
+npm start
 ```
 
-### 测试
+### 运行测试
 
 ```bash
 npm test
@@ -450,21 +562,35 @@ npm test
 
 ## 环境变量
 
-- `PSMCP_PROFILE_ROOT`
-- `PSMCP_DEFAULT_BROWSER`
-- `PSMCP_LOG_LEVEL`
-- `PSMCP_HEADLESS_DEFAULT`
-- `PSMCP_BROWSER_EXECUTABLE`
-- `PSMCP_PLAYWRIGHT_MCP_COMMAND`
-- `PSMCP_PLAYWRIGHT_MCP_ARGS`
+- `PSMCP_PROFILE_ROOT` — 浏览器 profile 和 session 元数据根目录
+- `PSMCP_DEFAULT_BROWSER` — `chrome` | `msedge` | `chromium`
+- `PSMCP_LOG_LEVEL` — 日志级别
+- `PSMCP_HEADLESS_DEFAULT` — `true` | `false`
+- `PSMCP_BROWSER_EXECUTABLE` — 指定浏览器可执行文件路径
+- `PSMCP_PLAYWRIGHT_MCP_COMMAND` — 覆盖底层 child MCP 命令
+- `PSMCP_PLAYWRIGHT_MCP_ARGS` — 覆盖底层 child MCP 参数
 
 ## 故障排查
 
-- **session 处于 `broken`** — 调用 `restart_session`
-- **session 处于 `profile_locked`** — 使用 `profileMode: "fallback-isolated"`
-- **启动 probe 失败** — 检查 `npx` 和 `@playwright/mcp`
-- **浏览器启动失败** — 检查 profile 权限或显式设置 `PSMCP_BROWSER_EXECUTABLE`
-- **profile seeding 失败** — 检查 source profile 是否存在，且当前系统用户可读
+### 启动阶段 probe discovery 失败
+
+- 确认机器上有 `npx`
+- 确认 `@playwright/mcp` 可以正常运行
+- 如果依赖 `npx @playwright/mcp@latest`，检查网络访问是否正常
+
+### 浏览器启动失败
+
+- 检查 profile 目录权限
+- 尝试修改 `PSMCP_PROFILE_ROOT`
+- 如果浏览器自动探测不对，显式设置 `PSMCP_BROWSER_EXECUTABLE`
+
+### Session 处于 `broken`
+
+使用 `restart_session` 强制关闭并重新拉起 session。
+
+### Session 处于 `profile_locked`
+
+说明同一个 profile 正被别的进程占用。如果你希望自动回退，可以创建一个 `profileMode: "fallback-isolated"` 的 session。
 
 ## License
 

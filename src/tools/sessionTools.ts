@@ -11,38 +11,16 @@ function text(data: unknown) {
 }
 
 function sessionMeta(s: SessionRecord) {
-  const isLive = s.profileSource.type === "live-browser-profile";
-  const warnings: string[] = [];
-  if (isLive) {
-    warnings.push("This session uses your real local Chrome profile directly — it is not isolated.");
-    warnings.push("Chrome must be closed before launching this session to avoid profile lock conflicts.");
-    warnings.push("This session is not forkable and not suitable for parallel multi-session use.");
-  }
   return {
-    sessionRef: `${s.name} (${s.id.slice(0, 8)})`,
+    displayRef: `${s.name} (${s.id.slice(0, 8)})`,
     browserBinary: s.launchConfig.executablePath ?? null,
-    isolation: isLive ? "none" : s.profileMode === "isolated" ? "isolated" : "persistent",
-    warnings: warnings.length > 0 ? warnings : undefined,
+    isolation: s.profileMode,
   };
 }
 
 const profileSourceSchema = z.union([
   z.object({ type: z.literal("managed-empty") }).strict(),
   z.object({ type: z.literal("session"), sessionId: z.string().min(1) }).strict(),
-  z
-    .object({
-      type: z.literal("live-browser-profile"),
-      browser: z.literal("chrome"),
-      profile: z.literal("default"),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("live-browser-profile"),
-      browser: z.literal("chrome"),
-      profileName: z.string().min(1),
-    })
-    .strict(),
 ]);
 
 export function registerSessionTools(
@@ -69,11 +47,8 @@ export function registerSessionTools(
           properties: {
             type: {
               type: "string",
-              enum: ["managed-empty", "session", "live-browser-profile"],
+              enum: ["managed-empty", "session"],
             },
-            browser: { type: "string", enum: ["chrome"], description: "Required when type=live-browser-profile" },
-            profile: { type: "string", enum: ["default"], description: "Use 'default' for the browser's default profile" },
-            profileName: { type: "string", description: "Named profile directory, e.g. 'Profile 1'" },
             sessionId: { type: "string", description: "Required when type=session" },
           },
           required: ["type"],
@@ -99,10 +74,7 @@ export function registerSessionTools(
         status: session.status,
         profileDir: session.profileDir,
         profileSource: session.profileSource,
-        managedProfile: session.managedProfile,
-        supportsFork: session.supportsFork,
         seededFromSessionId: session.seededFromSessionId,
-        seededFromExternalProfilePath: session.seededFromExternalProfilePath,
         materializedAt: session.materializedAt,
         ...sessionMeta(session),
       });
@@ -165,10 +137,7 @@ export function registerSessionTools(
           status: s.status,
           profileMode: s.profileMode,
           profileSource: s.profileSource,
-          managedProfile: s.managedProfile,
-          supportsFork: s.supportsFork,
           seededFromSessionId: s.seededFromSessionId,
-          seededFromExternalProfilePath: s.seededFromExternalProfilePath,
           materializedAt: s.materializedAt,
           generation: s.generation,
           createdAt: s.createdAt,

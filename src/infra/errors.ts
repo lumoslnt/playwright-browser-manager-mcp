@@ -109,22 +109,7 @@ export class InvalidProfileSourceError extends AppError {
     super(
       "InvalidProfileSourceError",
       `Unsupported profileSource type: '${type}'`,
-      { type, recommendedAction: "Use one of: managed-empty, session, live-browser-profile" },
-    );
-  }
-}
-
-export class ChromeNotInstalledError extends AppError {
-  constructor(searchedPaths: string | string[]) {
-    const paths = Array.isArray(searchedPaths) ? searchedPaths : [searchedPaths];
-    super(
-      "ChromeNotInstalledError",
-      `Chrome executable not found. Searched: ${paths.join(", ")}`,
-      {
-        searchedPaths: paths,
-        recommendedAction:
-          "Install Google Chrome or use a managed session with browserType=chromium instead.",
-      },
+      { type, recommendedAction: "Use one of: managed-empty, session" },
     );
   }
 }

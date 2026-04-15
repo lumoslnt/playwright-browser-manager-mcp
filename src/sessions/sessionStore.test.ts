@@ -39,20 +39,6 @@ test("saves and loads profileSource managed-empty", async () => {
   expect(loaded[0].profileSource).toEqual({ type: "managed-empty" });
 });
 
-test("saves and loads profileSource external-profile", async () => {
-  const file = await makeTempFile();
-  const store = new SessionStore(file);
-  const record = makeMinimalRecord({
-    profileSource: { type: "external-profile", path: "C:\\Users\\alice\\Profile 1" },
-    seededFromExternalProfilePath: "C:\\Users\\alice\\Profile 1",
-    materializedAt: "2026-04-14T00:00:00Z",
-  });
-  await store.save([record]);
-  const loaded = await store.load();
-  expect(loaded[0].profileSource).toEqual({ type: "external-profile", path: "C:\\Users\\alice\\Profile 1" });
-  expect(loaded[0].seededFromExternalProfilePath).toBe("C:\\Users\\alice\\Profile 1");
-  expect(loaded[0].materializedAt).toBe("2026-04-14T00:00:00Z");
-});
 
 test("saves and loads profileSource session", async () => {
   const file = await makeTempFile();

@@ -24,7 +24,7 @@ This MCP solves that by adding a browser-management layer on top of Playwright M
 - lazy browser launch
 - managed session lifecycle
 - auto-healing recovery for safe read-only browser calls
-- session/profile seeding from external browser profiles or existing managed sessions
+- session forking from existing managed sessions
 
 ## Use this when
 
@@ -34,7 +34,7 @@ Use this MCP if:
 - you want some sessions to keep login state while others stay isolated
 - you hit profile lock errors with plain Playwright MCP
 - you want fewer manual reconnect / restart steps after a browser closes unexpectedly
-- you want to bootstrap a new session from an existing browser profile or a logged-in managed session
+- you want to bootstrap a new session from an existing logged-in managed session
 
 ## Quick Start
 
@@ -102,7 +102,7 @@ Each managed session has:
 
 - a stable `sessionId`
 - a profile policy (`persistent`, `isolated`, or `fallback-isolated`)
-- an optional bootstrap source (`managed-empty`, `external-profile`, or `session`)
+- an optional bootstrap source (`managed-empty` or `session`)
 - lifecycle state (`idle`, `ready`, `recovering`, `broken`, etc.)
 - a routed tool surface that forwards Playwright browser calls to the right session
 
@@ -119,8 +119,8 @@ In other words:
 - **Profile modes**  
   Choose the right browser-state policy per session.
 
-- **Session/profile seeding**  
-  Initialize a new managed session from a cloned external browser profile or from an existing managed session.
+- **Session forking**  
+  Log in once in a managed session, then fork it to create independent copies with the same state.
 
 - **Lazy launch**  
   Browser child process starts only when a browser tool is first used.
@@ -142,69 +142,21 @@ In other words:
 | `isolated` | parallel tasks, sandboxed runs, throwaway sessions | Creates a fresh temporary profile for the session |
 | `fallback-isolated` | prefer persistent state, but avoid hard failure on lock conflicts | Tries the normal profile first, then falls back to a fresh isolated profile if the profile is locked |
 
-## Session/Profile Seeding
+## Getting Auth State into a Managed Session
 
-This MCP supports creating a new managed session from:
+The recommended approach is to log in directly inside a managed session, then reuse or fork it:
 
-1. a fresh empty managed profile
-2. a cloned external browser profile
-3. an existing managed session
-
-### `create_session` with `profileSource`
-
-Supported `profileSource` forms:
+1. Create a persistent managed session
+2. Navigate to your site and log in normally
+3. Reuse that session for authenticated tasks, or fork it for parallel work
 
 ```json
-{ "type": "managed-empty" }
+{ "name": "auth-session", "profileMode": "persistent" }
 ```
 
-```json
-{ "type": "external-profile", "path": "C:\\..." }
-```
+### Forking: share auth state across parallel sessions
 
-```json
-{ "type": "external-profile", "browser": "chrome", "profile": "default" }
-```
-
-```json
-{ "type": "external-profile", "browser": "msedge", "profileName": "Profile 1" }
-```
-
-```json
-{ "type": "session", "sessionId": "session-123" }
-```
-
-### Example: clone the default Chrome profile
-
-```json
-{
-  "name": "work-from-default-chrome",
-  "profileMode": "persistent",
-  "profileSource": {
-    "type": "external-profile",
-    "browser": "chrome",
-    "profile": "default"
-  }
-}
-```
-
-### Example: clone a named Edge profile
-
-```json
-{
-  "name": "work-from-edge-profile-1",
-  "profileMode": "persistent",
-  "profileSource": {
-    "type": "external-profile",
-    "browser": "msedge",
-    "profileName": "Profile 1"
-  }
-}
-```
-
-### Example: fork an existing managed session
-
-Use `fork_session` when you already have a managed session with useful browser state (for example, an authenticated session) and want to create a new independent session from it.
+Use `fork_session` when you have a managed session with useful browser state (for example, an authenticated session) and want to create independent copies of it.
 
 ```json
 {
@@ -214,21 +166,17 @@ Use `fork_session` when you already have a managed session with useful browser s
 }
 ```
 
-## Security Model for Seeding
+### Seeding from an existing managed session
 
-This MCP intentionally **does not support external-direct profile mounting**.
+You can also initialize a new session from an existing managed session using `profileSource`:
 
-That means:
-
-- it will **not** run a managed session directly on the user's live browser profile
-- external profiles are always **cloned into a new managed profile directory** first
-- forked sessions are also materialized into a new managed profile
-
-This keeps multi-session automation safer and more stable:
-
-- avoids live profile lock conflicts
-- avoids directly mutating the user's original profile
-- keeps all managed sessions on manager-owned profile directories
+```json
+{
+  "name": "new-session",
+  "profileMode": "persistent",
+  "profileSource": { "type": "session", "sessionId": "session-123" }
+}
+```
 
 ## Auto-Healing and Safe Retry
 
@@ -337,12 +285,6 @@ npm test
 - try a different `PSMCP_PROFILE_ROOT`
 - set `PSMCP_BROWSER_EXECUTABLE` if browser auto-detection is wrong
 
-### Profile seeding fails
-
-- verify the source profile exists
-- make sure the current OS user can read the source directory
-- when using `browser + profileName`, verify the named profile actually exists under that browser's user-data root
-
 ### Session is `broken`
 
 Use `restart_session` to force-close and relaunch the session.
@@ -381,7 +323,7 @@ MIT
 - 按需启动浏览器（lazy launch）
 - 管理 session 生命周期
 - 对安全的只读调用提供自动恢复（auto-healing）
-- 支持从外部浏览器 profile 或已有 managed session 做 session/profile seeding
+- 支持从已有 managed session fork 新 session
 
 ## 什么时候该用它？
 
@@ -391,7 +333,7 @@ MIT
 - 有的 session 需要保留登录态，有的 session 需要隔离运行
 - 你经常遇到 Playwright profile 锁冲突
 - 你希望浏览器异常关闭后，尽量少手动 reconnect / restart
-- 你希望从已有浏览器 profile 或一个已登录的 managed session 快速启动新 session
+- 你希望从已登录的 managed session fork 出新 session
 
 ## 快速开始
 
@@ -425,7 +367,7 @@ playwright-browser-manager-mcp
 }
 ```
 
-If installed globally:
+如果是全局安装：
 
 ```json
 {
@@ -459,7 +401,7 @@ If installed globally:
 
 - 一个稳定的 `sessionId`
 - 一个 profile 策略（`persistent`、`isolated`、`fallback-isolated`）
-- 一个可选的 bootstrap source（`managed-empty`、`external-profile`、`session`）
+- 一个可选的 bootstrap source（`managed-empty`、`session`）
 - 一套生命周期状态（`idle`、`ready`、`recovering`、`broken` 等）
 - 一组路由后的 Playwright browser tools
 
@@ -470,25 +412,25 @@ If installed globally:
 
 ## 核心特性
 
-- **显式 `sessionId` 路由**  
+- **显式 `sessionId` 路由**
   多 session 调用更确定，不容易串会话。
 
-- **Profile 模式**  
+- **Profile 模式**
   每个 session 可以选择适合自己的浏览器状态策略。
 
-- **Session/profile seeding**  
-  支持从外部浏览器 profile clone，或从已有 managed session fork 初始化新 session。
+- **Session Fork**
+  在一个 managed session 里登录一次，然后 fork 出多个独立的子 session。
 
-- **Lazy launch**  
+- **Lazy launch**
   创建 session 时不立即启动浏览器，第一次真正调用浏览器工具时才启动。
 
-- **自动恢复（Auto-healing）**  
+- **自动恢复（Auto-healing）**
   如果浏览器在安全的只读调用过程中意外关闭，manager 会清理失效连接、重新拉起浏览器，并自动重试一次。
 
-- **受管 session 生命周期**  
+- **受管 session 生命周期**
   支持显式创建、列出、关闭、重启、fork session。
 
-- **启动时自动发现子工具**  
+- **启动时自动发现子工具**
   底层 Playwright MCP 暴露的 browser tools 会在启动时被发现并注册成路由工具。
 
 ## Profile 模式说明
@@ -499,67 +441,19 @@ If installed globally:
 | `isolated` | 并行任务、沙盒任务、一次性会话 | 为当前 session 创建全新的临时 profile |
 | `fallback-isolated` | 希望优先使用 persistent，但 profile 被占用时不要直接失败 | 先尝试原 profile，若锁冲突则自动回退到新的 isolated profile |
 
-## Session/Profile Seeding
+## 如何把登录态带入 Managed Session
 
-这个 MCP 支持用以下来源初始化一个新的 managed session：
+推荐做法是直接在 managed session 里登录，然后复用或 fork 它：
 
-1. 全新空白 managed profile
-2. clone 外部浏览器 profile
-3. 从已有 managed session fork
-
-### `create_session` 的 `profileSource`
-
-支持以下形式：
+1. 创建一个 `persistent` managed session
+2. 在里面打开网站，正常登录
+3. 复用这个 session 执行需要认证的任务，或者 fork 出多个并行 session
 
 ```json
-{ "type": "managed-empty" }
+{ "name": "auth-session", "profileMode": "persistent" }
 ```
 
-```json
-{ "type": "external-profile", "path": "C:\\..." }
-```
-
-```json
-{ "type": "external-profile", "browser": "chrome", "profile": "default" }
-```
-
-```json
-{ "type": "external-profile", "browser": "msedge", "profileName": "Profile 1" }
-```
-
-```json
-{ "type": "session", "sessionId": "session-123" }
-```
-
-### 示例：clone 默认 Chrome profile
-
-```json
-{
-  "name": "work-from-default-chrome",
-  "profileMode": "persistent",
-  "profileSource": {
-    "type": "external-profile",
-    "browser": "chrome",
-    "profile": "default"
-  }
-}
-```
-
-### 示例：clone 一个命名的 Edge profile
-
-```json
-{
-  "name": "work-from-edge-profile-1",
-  "profileMode": "persistent",
-  "profileSource": {
-    "type": "external-profile",
-    "browser": "msedge",
-    "profileName": "Profile 1"
-  }
-}
-```
-
-### 示例：fork 一个已有的 managed session
+### Fork：在多个并行 session 间共享登录态
 
 当你已经有一个包含有用浏览器状态的 managed session（例如已经登录好的 session），希望再开一个新的独立 session 时，使用 `fork_session`：
 
@@ -571,21 +465,17 @@ If installed globally:
 }
 ```
 
-## Seeding 的安全模型
+### 从已有 managed session 初始化
 
-这个 MCP **明确不支持 external-direct profile mounting**。
+也可以用 `profileSource` 从已有 managed session 初始化一个新 session：
 
-也就是说：
-
-- 不会让 managed session 直接跑在用户正在使用的 live browser profile 上
-- 外部浏览器 profile 一律会先 clone 到新的 managed profile 目录
-- fork 出来的 session 也同样会 materialize 成新的 managed profile
-
-这样做的好处是：
-
-- 避免 live profile 锁冲突
-- 避免直接污染用户原 profile
-- 保证所有 managed session 都运行在 manager 自己拥有的 profile 目录上
+```json
+{
+  "name": "new-session",
+  "profileMode": "persistent",
+  "profileSource": { "type": "session", "sessionId": "session-123" }
+}
+```
 
 ## 自动恢复与安全重试
 
@@ -693,12 +583,6 @@ npm test
 - 检查 profile 目录权限
 - 尝试修改 `PSMCP_PROFILE_ROOT`
 - 如果浏览器自动探测不对，显式设置 `PSMCP_BROWSER_EXECUTABLE`
-
-### Profile seeding 失败
-
-- 检查 source profile 是否存在
-- 确认当前系统用户对 source 目录有读取权限
-- 如果使用 `browser + profileName`，确认该 profile 确实存在于对应浏览器的 user-data root 下
 
 ### Session 处于 `broken`
 

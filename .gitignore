@@ -29,6 +29,7 @@ docs/
 .claude/
 research/
 e2e/
+issues/
 
 # Editor / IDE
 .vscode/

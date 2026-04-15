@@ -156,3 +156,82 @@ test("materializeFromSessionProfile throws ProfileSeedSourceNotFoundError when d
   });
   await cleanup(root);
 });
+
+// --- Local State os_crypt key patching ---
+
+test("materializeFromExternalProfile with browser form patches os_crypt.encrypted_key on win32", async () => {
+  if (process.platform !== "win32") return;
+
+  // Simulate Chrome User Data root:
+  //   fakeUserData/Local State          <- has the real AES key
+  //   fakeUserData/Default/Cookies      <- cookies encrypted with that key
+  const fakeUserData = await makeTempDir();
+  const defaultProfile = path.join(fakeUserData, "Default");
+  await fs.mkdir(defaultProfile, { recursive: true });
+
+  const realKey = "REAL_DPAPI_WRAPPED_KEY_BASE64";
+  await fs.writeFile(
+    path.join(fakeUserData, "Local State"),
+    JSON.stringify({ os_crypt: { encrypted_key: realKey }, other: "preserved" }),
+  );
+  await fs.writeFile(path.join(defaultProfile, "Cookies"), "encrypted-cookie-data");
+
+  // Use explicit-path form pointing at fakeUserData so we can inject a known userDataRoot.
+  // We need the browser-form to trigger the patch, so we stub browserUserDataRoot by
+  // pointing LOCALAPPDATA env var so Chrome resolves to fakeUserData's parent.
+  //
+  // Approach: pass the Default dir as explicit path, then manually verify the patch
+  // by testing the private method indirectly via the browser-form variant.
+  //
+  // We create a minimal ProfileManager subclass that overrides browserUserDataRoot to return
+  // our fake dir instead of the real Chrome location.
+  const root = await makeTempDir();
+
+  class TestProfileManager extends ProfileManager {
+    override browserUserDataRoot(_browser: "chrome" | "msedge"): string {
+      return fakeUserData;
+    }
+  }
+
+  const pm = new TestProfileManager(root);
+  await pm.ensureRoot();
+
+  const { targetDir } = await pm.materializeFromExternalProfile({
+    type: "external-profile",
+    browser: "chrome",
+    profile: "default",
+  });
+
+  const clonedLS = JSON.parse(await fs.readFile(path.join(targetDir, "Local State"), "utf8"));
+  expect(clonedLS.os_crypt.encrypted_key).toBe(realKey);
+
+  await cleanup(root, fakeUserData);
+});
+
+test("materializeFromExternalProfile with path form does not patch Local State", async () => {
+  if (process.platform !== "win32") return;
+
+  const root = await makeTempDir();
+  const externalRoot = await makeTempDir();
+  const srcProfile = path.join(externalRoot, "myprofile");
+  await fs.mkdir(srcProfile, { recursive: true });
+  const originalKey = "ORIGINAL_WRONG_KEY";
+  await fs.writeFile(
+    path.join(srcProfile, "Local State"),
+    JSON.stringify({ os_crypt: { encrypted_key: originalKey } }),
+  );
+
+  const pm = new ProfileManager(root);
+  await pm.ensureRoot();
+
+  const { targetDir } = await pm.materializeFromExternalProfile({
+    type: "external-profile",
+    path: srcProfile,
+  });
+
+  // path-form: no patching, Local State copied verbatim
+  const clonedLS = JSON.parse(await fs.readFile(path.join(targetDir, "Local State"), "utf8"));
+  expect(clonedLS.os_crypt.encrypted_key).toBe(originalKey);
+
+  await cleanup(root, externalRoot);
+});

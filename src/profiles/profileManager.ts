@@ -49,7 +49,7 @@ export class ProfileManager {
     }
   }
 
-  private browserUserDataRoot(browser: "chrome" | "msedge"): string {
+  protected browserUserDataRoot(browser: "chrome" | "msedge"): string {
     const { platform } = process;
     if (platform === "win32") {
       const localAppData =
@@ -123,7 +123,39 @@ export class ProfileManager {
     const resolvedSourcePath = await this.resolveExternalProfile(input);
     const targetDir = await this.createManagedCloneDir(targetName);
     await this.copyProfileDir(resolvedSourcePath, targetDir);
+    if (process.platform === "win32" && "browser" in input) {
+      await this.patchLocalStateCryptKey(this.browserUserDataRoot(input.browser), targetDir);
+    }
     return { targetDir, resolvedSourcePath };
+  }
+
+  private async patchLocalStateCryptKey(userDataRoot: string, cloneDir: string): Promise<void> {
+    const realLocalStatePath = path.join(userDataRoot, "Local State");
+    const cloneLocalStatePath = path.join(cloneDir, "Local State");
+
+    let realLS: Record<string, unknown>;
+    try {
+      realLS = JSON.parse(await fs.readFile(realLocalStatePath, "utf-8")) as Record<string, unknown>;
+    } catch {
+      return; // no real Local State to copy from — skip silently
+    }
+
+    const realOsCrypt = realLS["os_crypt"] as Record<string, unknown> | undefined;
+    const encryptedKey = realOsCrypt?.["encrypted_key"];
+    if (typeof encryptedKey !== "string") return;
+
+    let cloneLS: Record<string, unknown>;
+    try {
+      cloneLS = JSON.parse(await fs.readFile(cloneLocalStatePath, "utf-8")) as Record<string, unknown>;
+    } catch {
+      cloneLS = {};
+    }
+
+    const cloneOsCrypt = (cloneLS["os_crypt"] ?? {}) as Record<string, unknown>;
+    cloneOsCrypt["encrypted_key"] = encryptedKey;
+    cloneLS["os_crypt"] = cloneOsCrypt;
+
+    await fs.writeFile(cloneLocalStatePath, JSON.stringify(cloneLS));
   }
 
   async materializeFromSessionProfile(

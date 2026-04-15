@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.1 - 2026-04-15
+
+### Fixed
+- Chrome/Edge profile clones now correctly decrypt cookies on Windows.
+  When seeding a session from an external browser profile (`profileSource: { type: "external-profile", browser: "chrome" | "msedge" }`),
+  the cloned profile directory now receives the correct `os_crypt.encrypted_key` from the browser's real `User Data/Local State`.
+  Previously, Chromium generated a fresh key for the clone, causing all copied cookie values (encrypted with the original DPAPI-wrapped AES key) to be silently discarded, resulting in unauthenticated sessions even when the user was logged in.
+
 ## 0.2.0 - 2026-04-14
 
 ### Added

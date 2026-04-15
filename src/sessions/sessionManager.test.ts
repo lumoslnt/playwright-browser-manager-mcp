@@ -1,4 +1,4 @@
-import { describe, test, expect } from "vitest";
+import { test, expect } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -36,86 +36,6 @@ test("createSession with no profileSource defaults to managed-empty", async () =
   await cleanup(root);
 });
 
-test("createSession with external-profile materializes a new dir and records metadata", async () => {
-  const { root, profilesRoot, manager } = await makeEnv();
-
-  // Create a fake external profile with a cookie file
-  const extProfile = path.join(root, "ext-profile");
-  await fs.mkdir(extProfile, { recursive: true });
-  await fs.writeFile(path.join(extProfile, "Cookies"), "auth-cookie");
-
-  const session = await manager.createSession({
-    name: "s2",
-    browserType: "chrome",
-    profileSource: { type: "external-profile", path: extProfile },
-  });
-
-  expect(session.profileSource).toEqual({ type: "external-profile", path: extProfile });
-  expect(session.seededFromExternalProfilePath).toBe(extProfile);
-  expect(session.materializedAt).toBeTruthy();
-  // The profileDir should be inside profilesRoot and contain the cookie file
-  expect(session.profileDir.startsWith(profilesRoot)).toBe(true);
-  const copied = await fs.readFile(path.join(session.profileDir, "Cookies"), "utf8");
-  expect(copied).toBe("auth-cookie");
-  await cleanup(root);
-});
-
-// --- Observability: seededFromExternalProfilePath always populated for all external-profile variants ---
-
-test("createSession with browser+profileName always records resolved seededFromExternalProfilePath", async () => {
-  const { root, profilesRoot, manager } = await makeEnv();
-
-  // Create a fake browser user data dir that looks like a real profile
-  const fakeUserDataRoot = path.join(root, "fake-browser-user-data");
-  const fakeProfileDir = path.join(fakeUserDataRoot, "Profile 1");
-  await fs.mkdir(fakeProfileDir, { recursive: true });
-  await fs.writeFile(path.join(fakeProfileDir, "Cookies"), "cookie-data");
-
-  // Patch ProfileManager to use our fake browser root
-  const pm = (manager as any).profiles as import("../profiles/profileManager.js").ProfileManager;
-  const origBrowserRoot = (pm as any).browserUserDataRoot.bind(pm);
-  (pm as any).browserUserDataRoot = (_browser: string) => fakeUserDataRoot;
-
-  const session = await manager.createSession({
-    name: "obs-profileName",
-    browserType: "chrome",
-    profileSource: { type: "external-profile", browser: "chrome", profileName: "Profile 1" },
-  });
-
-  // Must always contain the resolved real path, not undefined
-  expect(session.seededFromExternalProfilePath).toBe(fakeProfileDir);
-  expect(session.profileDir.startsWith(profilesRoot)).toBe(true);
-  const copied = await fs.readFile(path.join(session.profileDir, "Default", "Cookies"), "utf8");
-  expect(copied).toBe("cookie-data");
-
-  (pm as any).browserUserDataRoot = origBrowserRoot;
-  await cleanup(root);
-});
-
-test("createSession with browser+default always records resolved seededFromExternalProfilePath", async () => {
-  const { root, profilesRoot, manager } = await makeEnv();
-
-  const fakeUserDataRoot = path.join(root, "fake-browser-user-data2");
-  const fakeDefaultDir = path.join(fakeUserDataRoot, "Default");
-  await fs.mkdir(fakeDefaultDir, { recursive: true });
-  await fs.writeFile(path.join(fakeDefaultDir, "Cookies"), "default-cookie");
-
-  const pm = (manager as any).profiles as import("../profiles/profileManager.js").ProfileManager;
-  const origBrowserRoot = (pm as any).browserUserDataRoot.bind(pm);
-  (pm as any).browserUserDataRoot = (_browser: string) => fakeUserDataRoot;
-
-  const session = await manager.createSession({
-    name: "obs-default",
-    browserType: "chrome",
-    profileSource: { type: "external-profile", browser: "chrome", profile: "default" },
-  });
-
-  expect(session.seededFromExternalProfilePath).toBe(fakeDefaultDir);
-  expect(session.profileDir.startsWith(profilesRoot)).toBe(true);
-
-  (pm as any).browserUserDataRoot = origBrowserRoot;
-  await cleanup(root);
-});
 
 test("createSession with session source forks the source profileDir", async () => {
   const { root, profilesRoot, manager } = await makeEnv();
@@ -159,17 +79,6 @@ test("forkSession is sugar for createSession with session source", async () => {
   await cleanup(root);
 });
 
-test("createSession with external-profile throws ProfileSeedSourceNotFoundError for missing path", async () => {
-  const { root, manager } = await makeEnv();
-  await expect(
-    manager.createSession({
-      name: "bad",
-      browserType: "chrome",
-      profileSource: { type: "external-profile", path: "/does/not/exist" },
-    }),
-  ).rejects.toMatchObject({ code: "ProfileSeedSourceNotFoundError" });
-  await cleanup(root);
-});
 
 test("createSession with session source throws SessionNotFoundError for unknown session", async () => {
   const { root, manager } = await makeEnv();
@@ -212,7 +121,8 @@ test("createSession with live-browser-profile stores profileDir and marks non-ma
   });
 
   expect(session.profileSource).toEqual({ type: "live-browser-profile", browser: "chrome", profile: "default" });
-  expect(session.profileDir).toBe(defaultProfile);
+  expect(session.profileDir).toBe(fakeUserData);
+  expect(session.launchConfig.profileDirectoryName).toBe("Default");
   expect(session.managedProfile).toBe(false);
   expect(session.supportsFork).toBe(false);
   expect(session.launchConfig.executablePath).toBe(fakeBin);
@@ -268,5 +178,28 @@ test("closeSession for live-profile does not delete the profile directory", asyn
 
   const stat = await fs.stat(defaultProfile);
   expect(stat.isDirectory()).toBe(true);
+  await cleanup(root);
+});
+
+test("createSession with live-browser-profile rejects incompatible browserType", async () => {
+  const { root, manager } = await makeEnv();
+
+  const fakeUserData = path.join(root, "fake-chrome-user-data4");
+  const defaultProfile = path.join(fakeUserData, "Default");
+  await fs.mkdir(defaultProfile, { recursive: true });
+  const fakeBin = path.join(root, "chrome4.exe");
+  await fs.writeFile(fakeBin, "");
+
+  const pm = (manager as any).profiles as import("../profiles/profileManager.js").ProfileManager;
+  (pm as any).browserUserDataRoot = (_browser: string) => fakeUserData;
+  (pm as any).chromeBinaryPath = () => fakeBin;
+
+  await expect(
+    manager.createSession({
+      name: "bad-browser",
+      browserType: "chromium",
+      profileSource: { type: "live-browser-profile", browser: "chrome", profile: "default" },
+    }),
+  ).rejects.toMatchObject({ code: "UnsupportedOperationError" });
   await cleanup(root);
 });

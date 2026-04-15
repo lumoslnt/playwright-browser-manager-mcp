@@ -30,104 +30,6 @@ test("copyProfileDir copies files recursively", async () => {
   await cleanup(root);
 });
 
-// --- resolveExternalProfile ---
-
-test("resolveExternalProfile returns explicit path unchanged when directory exists", async () => {
-  const root = await makeTempDir();
-  const extProfile = path.join(root, "ext-profile");
-  await fs.mkdir(extProfile, { recursive: true });
-
-  const pm = new ProfileManager(root);
-  const resolved = await pm.resolveExternalProfile({ type: "external-profile", path: extProfile });
-  expect(resolved).toBe(extProfile);
-  await cleanup(root);
-});
-
-test("resolveExternalProfile throws ProfileSeedSourceNotFoundError when explicit path missing", async () => {
-  const root = await makeTempDir();
-  const pm = new ProfileManager(root);
-
-  await expect(pm.resolveExternalProfile({ type: "external-profile", path: "/does/not/exist" })).rejects.toMatchObject({
-    code: "ProfileSeedSourceNotFoundError",
-  });
-  await cleanup(root);
-});
-
-test("resolveExternalProfile throws ProfileSeedSourceNotFoundError for missing default browser profile", async () => {
-  const root = await makeTempDir();
-  const pm = new ProfileManager(root);
-  // On any CI machine, there will be no Chrome user data at the default path
-  // with a "Profile 999" — so this should throw.
-  await expect(
-    pm.resolveExternalProfile({ type: "external-profile", browser: "chrome", profileName: "Profile 999" }),
-  ).rejects.toMatchObject({ code: "ProfileSeedSourceNotFoundError" });
-  await cleanup(root);
-});
-
-// --- materializeFromExternalProfile ---
-
-test("materializeFromExternalProfile clones external dir into profilesRoot", async () => {
-  const root = await makeTempDir();
-  const externalRoot = await makeTempDir();
-  const srcProfile = path.join(externalRoot, "myprofile");
-  await fs.mkdir(srcProfile, { recursive: true });
-  await fs.writeFile(path.join(srcProfile, "Cookies"), "auth-data");
-
-  const pm = new ProfileManager(root);
-  await pm.ensureRoot();
-  const { targetDir, resolvedSourcePath } = await pm.materializeFromExternalProfile({
-    type: "external-profile",
-    path: srcProfile,
-  });
-
-  expect(targetDir.startsWith(root)).toBe(true);
-  expect(resolvedSourcePath).toBe(srcProfile);
-  expect(await fs.readFile(path.join(targetDir, "Cookies"), "utf8")).toBe("auth-data");
-  await cleanup(root, externalRoot);
-});
-
-test("materializeFromExternalProfile throws ProfileSeedSourceNotFoundError when path missing", async () => {
-  const root = await makeTempDir();
-  const pm = new ProfileManager(root);
-  await pm.ensureRoot();
-
-  await expect(
-    pm.materializeFromExternalProfile({ type: "external-profile", path: "/does/not/exist" }),
-  ).rejects.toMatchObject({
-    code: "ProfileSeedSourceNotFoundError",
-  });
-  await cleanup(root);
-});
-
-// --- Security boundary tests ---
-
-test("resolveExternalProfile rejects profileName containing '..'", async () => {
-  const root = await makeTempDir();
-  const pm = new ProfileManager(root);
-  await expect(
-    pm.resolveExternalProfile({ type: "external-profile", browser: "chrome", profileName: "../../evil" }),
-  ).rejects.toMatchObject({ code: "ProfileSeedSourceNotFoundError" });
-  await cleanup(root);
-});
-
-test("resolveExternalProfile rejects profileName containing forward slash", async () => {
-  const root = await makeTempDir();
-  const pm = new ProfileManager(root);
-  await expect(
-    pm.resolveExternalProfile({ type: "external-profile", browser: "chrome", profileName: "sub/dir" }),
-  ).rejects.toMatchObject({ code: "ProfileSeedSourceNotFoundError" });
-  await cleanup(root);
-});
-
-test("resolveExternalProfile rejects profileName containing backslash", async () => {
-  const root = await makeTempDir();
-  const pm = new ProfileManager(root);
-  await expect(
-    pm.resolveExternalProfile({ type: "external-profile", browser: "chrome", profileName: "sub\\dir" }),
-  ).rejects.toMatchObject({ code: "ProfileSeedSourceNotFoundError" });
-  await cleanup(root);
-});
-
 // --- materializeFromSessionProfile ---
 
 test("materializeFromSessionProfile clones a given profileDir", async () => {
@@ -157,79 +59,6 @@ test("materializeFromSessionProfile throws ProfileSeedSourceNotFoundError when d
   await cleanup(root);
 });
 
-// --- Local State os_crypt key patching ---
-
-test("materializeFromExternalProfile with browser form produces user-data-dir layout on win32", async () => {
-  if (process.platform !== "win32") return;
-
-  // Simulate Chrome User Data root:
-  //   fakeUserData/Local State          <- has the real AES key (top-level)
-  //   fakeUserData/Default/Network/Cookies  <- cookies encrypted with that key
-  const fakeUserData = await makeTempDir();
-  const defaultProfile = path.join(fakeUserData, "Default");
-  const networkDir = path.join(defaultProfile, "Network");
-  await fs.mkdir(networkDir, { recursive: true });
-
-  const realKey = "REAL_DPAPI_WRAPPED_KEY_BASE64";
-  await fs.writeFile(
-    path.join(fakeUserData, "Local State"),
-    JSON.stringify({ os_crypt: { encrypted_key: realKey }, other: "preserved" }),
-  );
-  await fs.writeFile(path.join(networkDir, "Cookies"), "encrypted-cookie-data");
-
-  const root = await makeTempDir();
-
-  class TestProfileManager extends ProfileManager {
-    override browserUserDataRoot(_browser: "chrome" | "msedge"): string {
-      return fakeUserData;
-    }
-  }
-
-  const pm = new TestProfileManager(root);
-  await pm.ensureRoot();
-
-  const { targetDir } = await pm.materializeFromExternalProfile({
-    type: "external-profile",
-    browser: "chrome",
-    profile: "default",
-  });
-
-  // Clone must be a user-data-dir: Local State at root, profile data under Default/
-  const clonedLS = JSON.parse(await fs.readFile(path.join(targetDir, "Local State"), "utf8"));
-  expect(clonedLS.os_crypt.encrypted_key).toBe(realKey);
-  expect(await fs.readFile(path.join(targetDir, "Default", "Network", "Cookies"), "utf8")).toBe("encrypted-cookie-data");
-
-  await cleanup(root, fakeUserData);
-});
-
-test("materializeFromExternalProfile with path form does not patch Local State", async () => {
-  if (process.platform !== "win32") return;
-
-  const root = await makeTempDir();
-  const externalRoot = await makeTempDir();
-  const srcProfile = path.join(externalRoot, "myprofile");
-  await fs.mkdir(srcProfile, { recursive: true });
-  const originalKey = "ORIGINAL_WRONG_KEY";
-  await fs.writeFile(
-    path.join(srcProfile, "Local State"),
-    JSON.stringify({ os_crypt: { encrypted_key: originalKey } }),
-  );
-
-  const pm = new ProfileManager(root);
-  await pm.ensureRoot();
-
-  const { targetDir } = await pm.materializeFromExternalProfile({
-    type: "external-profile",
-    path: srcProfile,
-  });
-
-  // path-form: no patching, Local State copied verbatim
-  const clonedLS = JSON.parse(await fs.readFile(path.join(targetDir, "Local State"), "utf8"));
-  expect(clonedLS.os_crypt.encrypted_key).toBe(originalKey);
-
-  await cleanup(root, externalRoot);
-});
-
 // --- resolveLiveBrowserProfile ---
 
 test("resolveLiveBrowserProfile returns profileDir and executablePath when both exist", async () => {
@@ -253,7 +82,9 @@ test("resolveLiveBrowserProfile returns profileDir and executablePath when both 
   const pm = new TestProfileManager(root);
   const result = await pm.resolveLiveBrowserProfile({ browser: "chrome", profile: "default" });
 
-  expect(result.profileDir).toBe(defaultProfile);
+  expect(result.profileDir).toBe(fakeUserData);
+  expect(result.profileDirectoryName).toBe("Default");
+  expect(result.userDataRoot).toBe(fakeUserData);
   expect(result.executablePath).toBe(fakeBin);
   await cleanup(root, fakeUserData);
 });
@@ -326,7 +157,8 @@ test("resolveLiveBrowserProfile with profileName resolves named profile director
   const pm = new TestProfileManager(root);
   const result = await pm.resolveLiveBrowserProfile({ browser: "chrome", profileName: "Profile 1" });
 
-  expect(result.profileDir).toBe(namedProfile);
+  expect(result.profileDir).toBe(fakeUserData);
+  expect(result.profileDirectoryName).toBe("Profile 1");
   await cleanup(root, fakeUserData);
 });
 

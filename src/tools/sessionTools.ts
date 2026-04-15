@@ -27,6 +27,20 @@ const profileSourceSchema = z.union([
     })
     .strict(),
   z.object({ type: z.literal("session"), sessionId: z.string().min(1) }).strict(),
+  z
+    .object({
+      type: z.literal("live-browser-profile"),
+      browser: z.literal("chrome"),
+      profile: z.literal("default"),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("live-browser-profile"),
+      browser: z.literal("chrome"),
+      profileName: z.string().min(1),
+    })
+    .strict(),
 ]);
 
 export function registerSessionTools(
@@ -53,10 +67,10 @@ export function registerSessionTools(
           properties: {
             type: {
               type: "string",
-              enum: ["managed-empty", "external-profile", "session"],
+              enum: ["managed-empty", "external-profile", "session", "live-browser-profile"],
             },
             path: { type: "string", description: "Required when type=external-profile and using explicit path" },
-            browser: { type: "string", enum: ["chrome", "msedge"], description: "When type=external-profile, pick which browser's profile to clone" },
+            browser: { type: "string", enum: ["chrome", "msedge"], description: "When type=external-profile or type=live-browser-profile, pick which browser's profile to use" },
             profile: { type: "string", enum: ["default"], description: "When browser is set, use 'default' for the default profile" },
             profileName: { type: "string", description: "When browser is set, use a named profile like 'Profile 1'" },
             sessionId: { type: "string", description: "Required when type=session" },
@@ -84,6 +98,8 @@ export function registerSessionTools(
         status: session.status,
         profileDir: session.profileDir,
         profileSource: session.profileSource,
+        managedProfile: session.managedProfile,
+        supportsFork: session.supportsFork,
         seededFromSessionId: session.seededFromSessionId,
         seededFromExternalProfilePath: session.seededFromExternalProfilePath,
         materializedAt: session.materializedAt,
@@ -147,6 +163,8 @@ export function registerSessionTools(
           status: s.status,
           profileMode: s.profileMode,
           profileSource: s.profileSource,
+          managedProfile: s.managedProfile,
+          supportsFork: s.supportsFork,
           seededFromSessionId: s.seededFromSessionId,
           seededFromExternalProfilePath: s.seededFromExternalProfilePath,
           materializedAt: s.materializedAt,
